@@ -318,6 +318,102 @@
   .day-temp { font-size: 0.75rem; font-weight: 600; color: var(--ink-faint); }
   .day-temp span { color: var(--ink); }
 
+  /* === LOADING SKELETON — shown while forecast data is being fetched ===
+     A subtle horizontal shimmer sweeps across placeholder bars to indicate
+     the app is actively loading, without blocking the UI. */
+  @keyframes shimmer {
+    0%   { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }
+  
+  /* === PULL-TO-REFRESH indicator ===
+     A small spinner appears at the top of the sheet as the user pulls down.
+     The bottom-sheet itself shifts down by --pull-distance so the user feels
+     they are dragging it. */
+  @keyframes ptr-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .ptr-indicator {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translate(-50%, calc(-100% + var(--pull-distance, 0px)));
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--paper-elev);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 10;
+  }
+  .bottom-sheet.is-pulling .ptr-indicator {
+    opacity: 1;
+    transition: none;
+  }
+  .ptr-indicator-arrow {
+    width: 14px;
+    height: 14px;
+    color: var(--gold);
+    transition: transform 0.2s ease;
+  }
+  .ptr-indicator.is-ready .ptr-indicator-arrow {
+    transform: rotate(180deg);
+  }
+  .ptr-indicator.is-refreshing .ptr-indicator-arrow {
+    animation: ptr-spin 0.8s linear infinite;
+  }
+  /* Pull-distance translation on the sheet itself */
+  .bottom-sheet.is-pulling {
+    transform: translateY(calc(var(--pull-distance, 0px) * -1));
+    transition: none;
+  }
+  .bottom-sheet.is-snapping {
+    transition: transform 0.25s ease;
+    transform: translateY(0);
+  }
+  .skeleton-card {
+    width: 100%;
+    height: 128px;
+    flex-shrink: 0;
+    position: relative;
+    border-bottom: 1px solid var(--line-soft);
+    padding: 8px 16px;
+    box-sizing: border-box;
+  }
+  .skeleton-bar {
+    background: linear-gradient(
+      90deg,
+      rgba(240, 230, 210, 0.04) 0%,
+      rgba(240, 230, 210, 0.10) 50%,
+      rgba(240, 230, 210, 0.04) 100%
+    );
+    background-size: 200px 100%;
+    background-repeat: no-repeat;
+    border-radius: 4px;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .skeleton-head {
+    height: 14px;
+    width: 100px;
+    margin: 8px auto;
+  }
+  .skeleton-graph {
+    height: 64px;
+    width: calc(100% - 30px);
+    margin: 8px auto;
+    border-radius: 8px;
+  }
+  /* Hide skeleton once weekly-stack has any real .day-card children */
+  .weekly-stack:has(.day-card) .skeleton-card {
+    display: none;
+  }
+
   /* === WEEKLY STACK — vertically scrollable list of day-cards + altitude panel === */
   .weekly-stack {
     flex: 1;
@@ -387,6 +483,34 @@
     }
   }
   .day-card:last-of-type { border-bottom: none; }
+  
+  /* Crossfade behavior: when the selected day changes (head tap → close), the
+     day-cards smoothly fade opacity so the user sees content swap rather than
+     snap. Default is fully visible; the .is-fading class temporarily reduces
+     opacity during the swap. */
+  .day-card {
+    transition: opacity 0.25s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .day-card.is-fading {
+    opacity: 0;
+  }
+  /* Staggered reveal when the sheet expands: each card starts pushed slightly
+     down + transparent, and rises up + fades in with a small per-card delay.
+     The transition-delay is set inline by JS based on dayIdx so the animation
+     looks like a chain pull from above. */
+  .bottom-sheet.is-revealing .day-card {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  /* When the sheet is fully expanded, cards transition back to their natural
+     state with a stagger — driven by inline --reveal-delay variables. */
+  .bottom-sheet.expanded .day-card {
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity 0.35s ease var(--reveal-delay, 0ms),
+      transform 0.45s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms);
+  }
   .day-card-head {
     display: flex;
     align-items: center;
@@ -742,8 +866,18 @@
          When sheet is collapsed, only the first day-card is visible (the rest are
          hidden via overflow). When expanded, the user can scroll vertically through
          the remaining 6 days plus the altitude profile. -->
+    <!-- Pull-to-refresh indicator (shown when user drags sheet down past threshold) -->
+    <div class="ptr-indicator" id="ptrIndicator">
+      <svg class="ptr-indicator-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </div>
     <div class="weekly-stack" id="weeklyStack">
-      <!-- day-cards are populated by JS in renderWeeklyStack() -->
+      <!-- Initial loading skeleton — replaced by real day-cards once data loads -->
+      <div class="skeleton-card">
+        <div class="skeleton-bar skeleton-head"></div>
+        <div class="skeleton-bar skeleton-graph"></div>
+      </div>
     </div>
 
     <!-- Data source attribution — always visible at bottom of sheet -->
@@ -852,9 +986,30 @@
         }
       }
 
+      // Smoothly tween wind speed/direction over time so the visual transition
+      // feels natural when the user changes the selected hour. We track target
+      // values; the animation step interpolates current → target each frame.
+      let targetSpeed = 0.3;
+      let targetDir = 0;
+      const SPEED_LERP = 0.04;  // per frame; ~25 frames (~0.4s) to converge
+      const DIR_LERP = 0.06;
+      
       function setWind(s, d) {
-        speed = Math.max(0.3, s);
-        dir = d;
+        targetSpeed = Math.max(0.3, s);
+        // Wrap direction to the shortest path (e.g. 350° → 10° should go via 0°,
+        // not the long way around)
+        const cur = ((dir % 360) + 360) % 360;
+        const tgt = ((d % 360) + 360) % 360;
+        let delta = tgt - cur;
+        if (delta > 180) delta -= 360;
+        else if (delta < -180) delta += 360;
+        targetDir = cur + delta;
+        dir = cur;  // normalize current to 0..360 range so lerp works smoothly
+      }
+
+      function tickWindLerp() {
+        speed += (targetSpeed - speed) * SPEED_LERP;
+        dir   += (targetDir   - dir)   * DIR_LERP;
       }
 
       function colorForSpeed(s) {
@@ -868,6 +1023,9 @@
           rafId = requestAnimationFrame(step);
           return;
         }
+
+        // Smoothly approach the target wind values each frame
+        tickWindLerp();
 
         const toDir = (dir + 180) % 360;
         const rad = (toDir - 90) * Math.PI / 180;
@@ -1630,9 +1788,16 @@
         if (isExpanded) {
           const hour = selectedIndex % POINTS_PER_DAY;
           const newIdx = dayIdx * POINTS_PER_DAY + hour;
-          updateSelection(newIdx);
-          scrollToSelectedDay(true);
-          setExpanded(false);
+          // Crossfade: hide all day-cards, switch selection + scroll + collapse,
+          // then fade them back in. The brief fade masks the scroll snap so the
+          // user perceives a content swap rather than a jump.
+          fadeOutDayCards();
+          setTimeout(() => {
+            updateSelection(newIdx);
+            scrollToSelectedDay(false);  // instant scroll while content is hidden
+            setExpanded(false);
+            fadeInDayCards();
+          }, 250);
         } else {
           setExpanded(true);
         }
@@ -1856,12 +2021,50 @@
       }
     }
 
+    // Smoothly tween a numeric value over `duration` ms, calling `onTick(value)`
+    // on each frame. Returns a cancel function. Used for animating the top-bar
+    // wind speed when the user picks a different time/day, so the value glides
+    // from its previous reading to the new one rather than snapping.
+    const tweenHandles = new WeakMap();
+    function tweenNumber(key, fromVal, toVal, duration, onTick) {
+      // Cancel any in-progress tween bound to the same key (e.g. the same DOM
+      // element) so a rapid sequence of selections doesn't pile up.
+      const prev = tweenHandles.get(key);
+      if (prev) cancelAnimationFrame(prev.raf);
+
+      const t0 = performance.now();
+      const handle = { raf: 0 };
+      tweenHandles.set(key, handle);
+      const step = (now) => {
+        const t = Math.min(1, (now - t0) / duration);
+        // Ease-out cubic — fast at start, settles smoothly at end
+        const eased = 1 - Math.pow(1 - t, 3);
+        const v = fromVal + (toVal - fromVal) * eased;
+        onTick(v);
+        if (t < 1) {
+          handle.raf = requestAnimationFrame(step);
+        } else {
+          tweenHandles.delete(key);
+        }
+      };
+      handle.raf = requestAnimationFrame(step);
+    }
+
     function updateSelection(idx) {
+      const prevSpeed = selectedIndex != null && avgWindSpeeds[selectedIndex] != null
+        ? avgWindSpeeds[selectedIndex]
+        : 0;
       selectedIndex = idx;
+
       const topSpeedEl = document.getElementById('topWindSpeed');
-      topSpeedEl.innerHTML = `${avgWindSpeeds[idx].toFixed(1)}<small>m/s</small>`;
       const currentSpeed = avgWindSpeeds[idx];
-      topSpeedEl.style.color = speedColor(currentSpeed);
+
+      // Tween the top-bar wind speed from its previous value to the new one
+      tweenNumber(topSpeedEl, prevSpeed, currentSpeed, 350, (v) => {
+        topSpeedEl.innerHTML = `${v.toFixed(1)}<small>m/s</small>`;
+        topSpeedEl.style.color = speedColor(v);
+      });
+
       // Replace the old "最大 X m/s" text with the timestamp of the selected forecast
       const dt = fullTimestamps[idx];
       if (dt) {
@@ -1925,13 +2128,37 @@
       }
     }
 
+    // Crossfade helpers — used when switching the selected day from the
+    // expanded sheet. Adding .is-fading sets opacity to 0 via the CSS transition.
+    function fadeOutDayCards() {
+      weeklyStack.querySelectorAll('.day-card').forEach(c => c.classList.add('is-fading'));
+    }
+    function fadeInDayCards() {
+      weeklyStack.querySelectorAll('.day-card').forEach(c => c.classList.remove('is-fading'));
+    }
+
     // === LOAD + REFRESH (used at startup and on point change) ===
     let isLoading = false;
+    let lastLoadedLat = null;
+    let lastLoadedLon = null;
+    function showLoadingSkeleton() {
+      // Replace the weekly-stack contents with a single shimmer placeholder so
+      // the user sees that something is happening (rather than stale data).
+      weeklyStack.innerHTML = `
+        <div class="skeleton-card">
+          <div class="skeleton-bar skeleton-head"></div>
+          <div class="skeleton-bar skeleton-graph"></div>
+        </div>
+      `;
+    }
     async function loadAndRefresh(lat, lon) {
       if (isLoading) return;
       isLoading = true;
+      showLoadingSkeleton();
       try {
         await loadForecast(lat, lon);
+        lastLoadedLat = lat;
+        lastLoadedLon = lon;
         refreshAfterDataLoaded();
       } catch (err) {
         console.error('Forecast load failed:', err);
@@ -1987,20 +2214,33 @@
 
     function setExpanded(expanded) {
       isExpanded = expanded;
-      sheet.classList.toggle('expanded', expanded);
+      if (expanded) {
+        // Stagger setup: assign per-card reveal delays so they cascade in
+        // (today first, future days following). Apply .is-revealing for one
+        // frame to set the "from" state, then add .expanded to trigger the
+        // transition with the staggered delays.
+        const cards = weeklyStack.querySelectorAll('.day-card');
+        cards.forEach((c, i) => {
+          c.style.setProperty('--reveal-delay', (i * 40) + 'ms');
+        });
+        sheet.classList.add('is-revealing');
+        // Force layout so the .is-revealing styles apply before .expanded
+        void sheet.offsetWidth;
+        sheet.classList.add('expanded');
+        // Clean up the from-state class once all reveal animations finish
+        const total = cards.length * 40 + 450;
+        setTimeout(() => sheet.classList.remove('is-revealing'), total);
+      } else {
+        sheet.classList.remove('expanded');
+        sheet.classList.remove('is-revealing');
+      }
       document.documentElement.style.setProperty('--sheet-h', (expanded ? EXPANDED : COLLAPSED) + 'px');
       requestAnimationFrame(() => {
         for (const c of dayCharts) if (c) c.resize();
         syncOverlayPositions();
         if (expanded) {
-          // Opening — always scroll to today (day 0) at top so the user
-          // sees today first, with future days below and ability to scroll
-          // up if needed for past content. The natural CSS height transition
-          // (~320ms) takes care of the smooth reveal.
           weeklyStack.scrollTop = 0;
         } else {
-          // Closing — snap to the selected day's row so it's the visible
-          // pinned card after the height transition completes.
           setTimeout(() => scrollToSelectedDay(false), 350);
         }
       });
@@ -2012,6 +2252,100 @@
 
     // Initial sheet height var for FAB positioning
     document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
+
+    // === PULL-TO-REFRESH ===
+    // When the user drags the bottom-sheet down (only valid when the sheet is
+    // already scrolled to top, or when collapsed), the sheet visually drops by
+    // the drag distance and shows a refresh indicator. Releasing past a
+    // threshold triggers a data reload; below the threshold cancels.
+    (() => {
+      const PTR_THRESHOLD = 60;     // px pull required to trigger refresh
+      const PTR_MAX = 100;          // visual cap on pull distance
+      const ptrIndicator = document.getElementById('ptrIndicator');
+      let ptrActive = false;
+      let ptrStartY = 0;
+      let ptrDistance = 0;
+      let ptrPointerId = null;
+
+      function canStartPull() {
+        // Only start a pull when we're actually at the top of any scrollable
+        // content. When expanded, that means weeklyStack.scrollTop === 0.
+        // When collapsed, the stack is at top by definition.
+        if (!isExpanded) return true;
+        return weeklyStack.scrollTop <= 0;
+      }
+
+      function setPullDistance(d) {
+        ptrDistance = d;
+        const capped = Math.min(PTR_MAX, Math.max(0, d));
+        sheet.style.setProperty('--pull-distance', capped + 'px');
+        ptrIndicator.classList.toggle('is-ready', capped >= PTR_THRESHOLD);
+      }
+
+      function onPointerDown(e) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (!canStartPull()) return;
+        ptrPointerId = e.pointerId;
+        ptrStartY = e.clientY;
+        ptrActive = true;
+        ptrDistance = 0;
+      }
+
+      function onPointerMove(e) {
+        if (!ptrActive || e.pointerId !== ptrPointerId) return;
+        const dy = e.clientY - ptrStartY;
+        if (dy <= 0) {
+          // User reversed direction — cancel
+          if (ptrDistance > 0) setPullDistance(0);
+          return;
+        }
+        // Engage pulling state once we have meaningful drag and we're still at
+        // top of scroll. Apply a rubber-band feel: the distance grows but with
+        // diminishing returns past a soft cap.
+        if (!sheet.classList.contains('is-pulling')) {
+          if (!canStartPull()) return;
+          sheet.classList.add('is-pulling');
+          sheet.classList.remove('is-snapping');
+        }
+        // Rubber band: dy * 0.5 with soft cap
+        const eased = dy * 0.5;
+        setPullDistance(eased);
+        if (e.cancelable) e.preventDefault();
+      }
+
+      function onPointerEnd(e) {
+        if (!ptrActive) return;
+        ptrActive = false;
+        ptrPointerId = null;
+        if (!sheet.classList.contains('is-pulling')) return;
+        const triggered = ptrDistance >= PTR_THRESHOLD;
+        sheet.classList.remove('is-pulling');
+        sheet.classList.add('is-snapping');
+        if (triggered) {
+          // Show refreshing state, then trigger reload
+          ptrIndicator.classList.add('is-refreshing');
+          ptrIndicator.classList.remove('is-ready');
+          // Use whatever the current active point is for the reload
+          const currentLat = lastLoadedLat || initialLat;
+          const currentLon = lastLoadedLon || initialLon;
+          loadAndRefresh(currentLat, currentLon).finally(() => {
+            ptrIndicator.classList.remove('is-refreshing');
+          });
+        } else {
+          ptrIndicator.classList.remove('is-ready');
+        }
+        // Reset distance after the snap-back animation finishes
+        setTimeout(() => {
+          sheet.style.setProperty('--pull-distance', '0px');
+          sheet.classList.remove('is-snapping');
+        }, 260);
+      }
+
+      sheet.addEventListener('pointerdown', onPointerDown);
+      sheet.addEventListener('pointermove', onPointerMove, { passive: false });
+      sheet.addEventListener('pointerup', onPointerEnd);
+      sheet.addEventListener('pointercancel', onPointerEnd);
+    })();
 
     // Prevent body bounce-scroll on iOS
     document.body.addEventListener('touchmove', (e) => {
