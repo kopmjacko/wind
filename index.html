@@ -313,28 +313,10 @@
     padding: 0 0 max(env(safe-area-inset-bottom, 0px), 32px);
   }
 
-  /* Legacy elements no longer used (replaced by per-day-card layout) */
-  .days-row, .day-stripes, .day-separators, .days-tap-zone {
-    display: none !important;
-  }
   .day-text { font-size: 0.95rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
   .summary-icon { font-size: 1rem; }
   .day-temp { font-size: 0.75rem; font-weight: 600; color: var(--ink-faint); }
   .day-temp span { color: var(--ink); }
-  
-  /* The tap-zone overlay: invisible, full-width, sits above the days-row in the
-     non-scrolling layer. Captures taps and slide-up gestures to expand the sheet,
-     while letting horizontal swipes pass through to the inner scroller. */
-  .days-tap-zone {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 36px;
-    z-index: 8;
-    cursor: pointer;
-  }
-  .days-tap-zone:active { background: rgba(255, 255, 255, 0.04); }
 
   /* === WEEKLY STACK — vertically scrollable list of day-cards + altitude panel === */
   .weekly-stack {
@@ -1287,11 +1269,18 @@
       });
     }
 
-    function speedColor(v) {
-      if (v >= 4.5) return '#eb5757';
-      if (v >= 3.0) return '#e0a850';
-      return '#5cc88a';
+    // Speed bands — single source of truth for color, RGB triplet, and fill alpha.
+    // Used by speedColor() (hex) and segment fill gradients (rgba).
+    const SPEED_BANDS = [
+      { min: 4.5, hex: '#eb5757', rgb: '235, 87, 87',  fillAlpha: 0.45 },  // alert red
+      { min: 3.0, hex: '#e0a850', rgb: '224, 168, 80', fillAlpha: 0.35 },  // gold
+      { min: 0.0, hex: '#5cc88a', rgb: '92, 200, 138', fillAlpha: 0.30 },  // calm green
+    ];
+    function speedBand(v) {
+      for (const b of SPEED_BANDS) if (v >= b.min) return b;
+      return SPEED_BANDS[SPEED_BANDS.length - 1];
     }
+    function speedColor(v) { return speedBand(v).hex; }
 
     function windArrow(deg) {
       return `<span style="display:inline-block; transform: rotate(${deg + 180}deg);">↑</span>`;
@@ -1462,6 +1451,16 @@
       return [a0, a1];
     }
 
+    // Returns a Chart.js scriptable callback that gives the dot color for a day's
+    // chart — transparent for ghost endpoints, speed-band color for real points.
+    function pointColorFor(dayIdx) {
+      return (ctx) => {
+        if (isGhost(ctx.dataIndex)) return 'rgba(0,0,0,0)';
+        const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
+        return speedColor(avgWindSpeeds[realIdx] || 0);
+      };
+    }
+
     // Per-day overlay-sync plugin: positions wind-info and time-col elements
     // to match each chart's data point x-coordinates. Runs after each draw so
     // the overlay always matches Chart.js's internal layout (no race conditions).
@@ -1488,66 +1487,65 @@
       };
     }
 
+    // Draw text with a dark halo (background outline) for readability against
+    // the chart's gradient fill. Halo color is the page bg; main color is passed in.
+    function fillTextWithHalo(ctx, text, x, y, mainColor) {
+      ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
+      ctx.fillText(text, x - 1, y);
+      ctx.fillText(text, x + 1, y);
+      ctx.fillText(text, x, y - 1);
+      ctx.fillText(text, x, y + 1);
+      ctx.fillStyle = mainColor;
+      ctx.fillText(text, x, y);
+    }
+
+    // Per-day plugin: draws horizontal grid + Y-axis labels + primary axes + m/s unit
     function makeDayBoundaryPlugin(dayIdx) {
+      const Y_LABEL_X = 14;
+      const Y_AXIS_X = 28.5;  // half-pixel offset for crisp 1px line
+      const UNIT_X = 12;
+      const AXIS_COLOR = 'rgba(240, 230, 210, 0.25)';
+      const GRID_COLOR = 'rgba(240, 230, 210, 0.08)';
+      const LABEL_COLOR = 'rgba(240, 230, 210, 0.7)';
+      const UNIT_COLOR = 'rgba(240, 230, 210, 0.55)';
       return {
         id: `dayBoundary_${dayIdx}`,
         beforeDraw: (chart) => {
           const {ctx, chartArea} = chart;
           const yScale = chart.scales.y;
           if (!yScale || !chartArea) return;
+          // Compute Y-axis label values (skip 0 and max)
           const step = pickYStep(yScale.max);
-          const labelValues = [];
-          for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
-            if (v > 0 && v < yScale.max) labelValues.push(v);
-          }
           ctx.save();
+          // Grid lines + Y-axis number labels
           ctx.font = "600 9px 'Inter', sans-serif";
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'left';
-          for (const v of labelValues) {
+          for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
+            if (v <= 0 || v >= yScale.max) continue;
             const y = yScale.getPixelForValue(v);
             ctx.beginPath();
-            ctx.strokeStyle = 'rgba(240, 230, 210, 0.08)';
+            ctx.strokeStyle = GRID_COLOR;
             ctx.lineWidth = 1;
             ctx.moveTo(0, y);
             ctx.lineTo(chart.width, y);
             ctx.stroke();
-            const labelX = 14;
-            ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
-            ctx.fillText(String(v), labelX - 1, y);
-            ctx.fillText(String(v), labelX + 1, y);
-            ctx.fillText(String(v), labelX, y - 1);
-            ctx.fillText(String(v), labelX, y + 1);
-            ctx.fillStyle = 'rgba(240, 230, 210, 0.7)';
-            ctx.fillText(String(v), labelX, y);
+            fillTextWithHalo(ctx, String(v), Y_LABEL_X, y, LABEL_COLOR);
           }
-          const Y_LABEL_RIGHT_PAD = 28;
+          // Primary axes (Y vertical + X horizontal baseline)
           ctx.beginPath();
-          ctx.strokeStyle = 'rgba(240, 230, 210, 0.25)';
+          ctx.strokeStyle = AXIS_COLOR;
           ctx.lineWidth = 1;
-          // Primary Y-axis vertical line (right of speed labels)
-          ctx.moveTo(Y_LABEL_RIGHT_PAD + 0.5, chartArea.top);
-          ctx.lineTo(Y_LABEL_RIGHT_PAD + 0.5, chartArea.bottom);
-          // Primary X-axis horizontal line (chart baseline)
+          ctx.moveTo(Y_AXIS_X, chartArea.top);
+          ctx.lineTo(Y_AXIS_X, chartArea.bottom);
           const xAxisY = Math.round(chartArea.bottom) + 0.5;
-          ctx.moveTo(Y_LABEL_RIGHT_PAD + 0.5, xAxisY);
+          ctx.moveTo(Y_AXIS_X, xAxisY);
           ctx.lineTo(chart.width, xAxisY);
           ctx.stroke();
-
-          // Unit label "m/s" near the top of the Y-axis
+          // Unit label "m/s" near top of Y-axis
           ctx.font = "600 8px 'Inter', sans-serif";
-          ctx.textAlign = 'left';
           ctx.textBaseline = 'top';
-          const unitX = 12;
-          const unitY = Math.max(0, chartArea.top - 10);
-          ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
-          ctx.fillText('m/s', unitX - 1, unitY);
-          ctx.fillText('m/s', unitX + 1, unitY);
-          ctx.fillText('m/s', unitX, unitY - 1);
-          ctx.fillText('m/s', unitX, unitY + 1);
-          ctx.fillStyle = 'rgba(240, 230, 210, 0.55)';
-          ctx.fillText('m/s', unitX, unitY);
-
+          fillTextWithHalo(ctx, 'm/s', UNIT_X, Math.max(0, chartArea.top - 10), UNIT_COLOR);
           ctx.restore();
         }
       };
@@ -1712,16 +1710,8 @@
               borderColor: '#f0e6d2',
               backgroundColor: 'rgba(240, 230, 210, 0.15)',
               borderWidth: 2, fill: true, tension: 0.4,
-              pointBackgroundColor: (ctx) => {
-                if (isGhost(ctx.dataIndex)) return 'rgba(0,0,0,0)';
-                const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
-                return speedColor(avgWindSpeeds[realIdx] || 0);
-              },
-              pointBorderColor: (ctx) => {
-                if (isGhost(ctx.dataIndex)) return 'rgba(0,0,0,0)';
-                const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
-                return speedColor(avgWindSpeeds[realIdx] || 0);
-              },
+              pointBackgroundColor: pointColorFor(dayIdx),
+              pointBorderColor: pointColorFor(dayIdx),
               pointRadius: (ctx) => {
                 if (isGhost(ctx.dataIndex)) return 0;
                 const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
@@ -1735,16 +1725,14 @@
                   return buildSegmentGradient(ctx, '240, 230, 210', a0, a1);
                 },
                 backgroundColor: (ctx) => {
+                  // Use whichever endpoint is a real data point; ghosts have no value
                   let realIdx = -1;
                   if (!isGhost(ctx.p0DataIndex)) realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.p0DataIndex);
                   else if (!isGhost(ctx.p1DataIndex)) realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.p1DataIndex);
                   const v = realIdx >= 0 ? avgWindSpeeds[realIdx] : 0;
-                  let rgb, baseA;
-                  if (v >= 4.5)      { rgb = '235, 87, 87';  baseA = 0.45; }
-                  else if (v >= 3.0) { rgb = '224, 168, 80'; baseA = 0.35; }
-                  else               { rgb = '92, 200, 138'; baseA = 0.30; }
-                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, baseA);
-                  return buildSegmentGradient(ctx, rgb, a0, a1);
+                  const band = speedBand(v);
+                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, band.fillAlpha);
+                  return buildSegmentGradient(ctx, band.rgb, a0, a1);
                 }
               }
             }
@@ -1784,24 +1772,11 @@
       dayCharts[dayIdx] = chart;
     }
 
+    // Overlay sync is handled per-chart by makeOverlaySyncPlugin (afterDraw hook).
+    // This function is a fallback that just triggers a redraw on all charts so
+    // the plugin runs again — useful after resize / data reload events.
     function syncOverlayPositions() {
-      for (let d = 0; d < DAYS; d++) {
-        const chart = dayCharts[d];
-        if (!chart || !chart.scales || !chart.scales.x) continue;
-        const meta = chart.getDatasetMeta(1);
-        if (!meta || !meta.data || meta.data.length === 0) continue;
-        const infoOverlay = dayInfoOverlays[d];
-        const timeOverlay = dayTimeOverlays[d];
-        const infos = infoOverlay.querySelectorAll('.wind-info-col');
-        const times = timeOverlay.querySelectorAll('.time-col');
-        for (let h = 0; h < POINTS_PER_DAY; h++) {
-          const point = meta.data[h + 1];
-          if (!point) continue;
-          const px = point.x;
-          if (infos[h]) infos[h].style.left = px + 'px';
-          if (times[h]) times[h].style.left = px + 'px';
-        }
-      }
+      for (const c of dayCharts) if (c) c.draw();
     }
 
     function renderWeeklyStack() {
@@ -1834,10 +1809,6 @@
 
     // === SELECTION + ALERT ===
     let selectedIndex = 2;
-
-    // All dots use the speed-based color (selected stays the same color, just slightly larger)
-    const getPointColors = () => avgWindSpeeds.map((v) => speedColor(v));
-    const getPointRadii = (idx) => avgWindSpeeds.map((_, i) => i === idx ? 5 : 3);
 
     function updateAltPanel(idx) {
       const profile = altitudeProfileFor(idx);
@@ -1893,19 +1864,15 @@
       topSpeedEl.style.color = speedColor(currentSpeed);
       // Replace the old "最大 X m/s" text with the timestamp of the selected forecast
       const dt = fullTimestamps[idx];
-      const dayStr = `${dt.getMonth()+1}/${dt.getDate()}(${dow[dt.getDay()]})`;
-      const timeStr = `${String(dt.getHours()).padStart(2,'0')}:00`;
-      document.getElementById('topWindTime').textContent = `${dayStr} ${timeStr}`;
+      if (dt) {
+        const dayStr = `${dt.getMonth()+1}/${dt.getDate()}(${dow[dt.getDay()]})`;
+        const timeStr = `${String(dt.getHours()).padStart(2,'0')}:00`;
+        document.getElementById('topWindTime').textContent = `${dayStr} ${timeStr}`;
+      }
       document.getElementById('topWindDir').style.transform = `rotate(${windDirs[idx] + 180}deg)`;
       // Point styling is handled by scriptable functions on each day-card chart;
       // they read selectedIndex on every draw, so we just trigger a redraw on all.
       for (const c of dayCharts) if (c) c.update('none');
-      // Update stacked-above/below classes so collapsed-state stacking
-      // reflects the new selected day. Skip when expanded to avoid disrupting
-      // the user's view while they're browsing the week.
-      if (typeof applyShutterDelays === 'function' && !isExpanded) {
-        applyShutterDelays(false);
-      }
       // Kick off the expanding-ring animation around the newly selected dot
       triggerSelectionAnim();
       updateAltPanel(idx);
@@ -1916,12 +1883,9 @@
     // === REFRESH UI AFTER DATA LOADS / CHANGES ===
     let hasInitialSelection = false;
     
-    // Choose the data index closest to the current local time.
-    //   - If now is within today's 7:00–19:00, pick the nearest forecast hour
-    //   - If now is past today's 19:00 (or before 7:00), pick tomorrow's 7:00
+    // Initial selection: today's earliest forecast hour (07:00). The user can
+    // tap day-cards to switch days, or hours to switch within a day.
     function pickIndexForNow() {
-      // Initial selection: today's earliest forecast hour (07:00).
-      // The user can tap individual hours to drill into specific times.
       return 0;  // day 0 (today), hour index 0 (07:00)
     }
     
@@ -1930,33 +1894,17 @@
       renderWeeklyStack();
 
       // First load: pick the time nearest to now; preserve selection on subsequent loads
-      const isFirstLoad = !hasInitialSelection;
-      if (isFirstLoad) {
+      if (!hasInitialSelection) {
         selectedIndex = pickIndexForNow();
         hasInitialSelection = true;
       }
       if (selectedIndex >= avgWindSpeeds.length) selectedIndex = 0;
 
-      reorderDayCards();
+      requestAnimationFrame(() => scrollToSelectedDay(false));
       updateSelection(selectedIndex);
-
-      // Position the absolutely-placed overlay elements (speed/arrow/time).
-      // Chart.js's `responsive: true` charts may not have laid out their
-      // pixel positions on the very first frame, so we retry a few times
-      // until each chart's first data point has a non-zero x position.
-      const trySync = (attemptsLeft) => {
-        const ready = dayCharts.every(c => {
-          if (!c) return false;
-          const meta = c.getDatasetMeta(1);
-          return meta && meta.data && meta.data[1] && meta.data[1].x > 0;
-        });
-        if (ready || attemptsLeft <= 0) {
-          syncOverlayPositions();
-        } else {
-          requestAnimationFrame(() => trySync(attemptsLeft - 1));
-        }
-      };
-      requestAnimationFrame(() => trySync(20));
+      // Note: overlay positions (wind-info / time-col) sync automatically via
+      // each chart's afterDraw plugin (makeOverlaySyncPlugin), so no explicit
+      // sync call is needed here — Chart.js will trigger draws as it lays out.
     }
 
     // Move the day-card matching `selectedIndex`'s day to the top of weekly-stack
@@ -1975,12 +1923,6 @@
       } else {
         weeklyStack.scrollTop = targetTop;
       }
-    }
-    // Kept for backward compatibility — refresh path calls this.
-    function reorderDayCards() {
-      // Apply stacked classes so collapsed view shows only the selected card
-      applyShutterDelays(false);
-      requestAnimationFrame(() => scrollToSelectedDay(false));
     }
 
     // === LOAD + REFRESH (used at startup and on point change) ===
