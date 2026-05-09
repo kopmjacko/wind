@@ -295,9 +295,8 @@
   .bottom-sheet {
     bottom: 0; left: 0; width: 100%;
     border-radius: 0;       /* edge to edge */
-    /* Bottom padding: at least 32px clearance for Android gesture bar / iOS home bar.
-       max() ensures we use whichever is greater between the safe-area inset and 32px. */
-    padding: 0 0 max(env(safe-area-inset-bottom, 0px), 32px);
+    /* No bottom padding when collapsed — sheet height matches the day-card. */
+    padding: 0;
     box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.6);
     border: none;
     border-top: 1px solid var(--line);
@@ -309,67 +308,14 @@
   }
   .bottom-sheet.expanded {
     height: var(--sheet-expanded-h);
+    /* When expanded, add bottom padding so content doesn't sit under the
+       Android gesture bar / iOS home indicator. */
+    padding: 0 0 max(env(safe-area-inset-bottom, 0px), 32px);
   }
 
-  /* === DAYS ROW (tap + slide-up handle, scrolls with graph) === */
-  /* Lives inside the scroll inner so each day cell has 1800/7 = ~257px of room */
-  .days-row {
-    display: flex;
-    width: 100%;
-    height: 36px;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 5;
-  }
-  .day-block {
-    /* Width is set inline by JS to match the chart's day boundary positions */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-width: 0;
-    flex-shrink: 0;
-  }
-  /* Day-block backgrounds are drawn separately as absolute-positioned stripes
-     so they align with the chart's day boundaries (see .day-stripes below). */
-  
-  /* Striped backgrounds spanning days-row, drawn as absolutely-positioned elements
-     placed at the same x ranges as the chart's day boundaries. */
-  .day-stripes {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 36px;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .day-stripe {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    background: var(--bg-alt);
-  }
-  
-  /* Vertical separator lines spanning from days-row through the chart, drawn as
-     absolutely positioned elements. JS sets each one's `left` to match the
-     chart's day boundary so days-row separators align perfectly with chart lines. */
-  .day-separators {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 36px;  /* same as days-row */
-    pointer-events: none;
-    z-index: 6;
-  }
-  .day-separator {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--line);
-    transform: translateX(-0.5px);
+  /* Legacy elements no longer used (replaced by per-day-card layout) */
+  .days-row, .day-stripes, .day-separators, .days-tap-zone {
+    display: none !important;
   }
   .day-text { font-size: 0.95rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
   .summary-icon { font-size: 1rem; }
@@ -390,81 +336,153 @@
   }
   .days-tap-zone:active { background: rgba(255, 255, 255, 0.04); }
 
-  /* === GRAPH AREA — horizontally scrollable === */
-  /* === GRAPH AREA — scrolls horizontally, contains days + chart === */
-  .graph-section {
-    position: relative;
-    width: 100%;
-    /* 36px days-row + 96px chart = 132px total */
-    height: 132px;
-    flex-shrink: 0;
-    overflow: hidden;
-  }
-  .graph-scroller {
-    width: 100%;
-    height: 100%;
-    overflow-x: auto;
+  /* === WEEKLY STACK — vertically scrollable list of day-cards + altitude panel === */
+  .weekly-stack {
+    flex: 1;
+    min-height: 128px;  /* always fit at least one full day-card row */
     overflow-y: hidden;
+    overflow-x: hidden;
     scrollbar-width: none;
+  }
+  .bottom-sheet.expanded .weekly-stack {
+    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .graph-scroller::-webkit-scrollbar { display: none; }
-  .graph-scroll-inner {
-    width: 1800px;
-    height: 100%;
-    position: relative;
-    display: flex;
-    flex-direction: column;
+  .weekly-stack::-webkit-scrollbar { display: none; }
+  
+  /* On wider screens, show day-cards in a multi-column grid:
+       <  720px → 1 column  (mobile)
+       720-1080 → 2 columns (tablet)
+       ≥ 1080px → 3 columns (desktop)
+     The altitude panel always spans the full width. */
+  @media (min-width: 720px) {
+    .weekly-stack {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-auto-rows: 128px;
+      align-content: start;
+    }
+    .alt-panel {
+      grid-column: 1 / -1;
+    }
   }
-  /* The chart sub-region inside the scroll inner */
-  .chart-region {
-    position: relative;
+  @media (min-width: 1080px) {
+    .weekly-stack {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+  }
+  
+  /* One day-card per day: header (date + temp) + chart fitting full container width */
+  .day-card {
     width: 100%;
-    height: 96px;
+    height: 128px;  /* 36px header + 92px chart (4px buffer for time labels) */
     flex-shrink: 0;
+    position: relative;
+    border-bottom: 1px solid var(--line-soft);
   }
-
-  /* Wind direction arrows above chart */
-  .wind-arrows-overlay {
-    position: absolute;
-    top: 4px;
-    left: 0;
-    width: 100%;
-    height: 24px;
-    pointer-events: none;  /* container ignores clicks; children opt back in */
-    z-index: 5;
+  /* Vertical column borders between grid cells.
+     Easier than nth-child arithmetic: render a right border on every cell,
+     then remove it from cells that sit on the rightmost column. We can't
+     reliably target the last column with CSS alone for variable counts, so
+     we set the right border based on each layout's column count. */
+  @media (min-width: 720px) {
+    .day-card {
+      border-right: 1px solid var(--line-soft);
+    }
+    /* Hide right border on the rightmost column (every 2nd card) for 2-col layout */
+    .day-card:nth-child(2n) {
+      border-right: none;
+    }
   }
-  .wind-arrow-col {
-    position: absolute;
-    top: 0;
-    transform: translateX(-50%);
-    /* Width/height of tap target — content centered inside */
-    width: 32px;
-    height: 32px;
-    margin-top: -4px;  /* extend tap area slightly above */
+  @media (min-width: 1080px) {
+    /* For 3-col layout, restore the right border on every card... */
+    .day-card:nth-child(2n) {
+      border-right: 1px solid var(--line-soft);
+    }
+    /* ...then hide it on every 3rd card (rightmost column) */
+    .day-card:nth-child(3n) {
+      border-right: none;
+    }
+  }
+  .day-card:last-of-type { border-bottom: none; }
+  .day-card-head {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.15rem;
-    line-height: 1;
-    color: var(--ink);
-    filter: drop-shadow(0 0 3px rgba(13, 20, 38, 0.9));
-    white-space: nowrap;
-    pointer-events: auto;
+    gap: 6px;
+    width: 100%;
+    height: 36px;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  .wind-arrow-col:active {
-    transform: translateX(-50%) scale(1.15);
-    transition: transform 0.1s ease;
+  .day-card-head:active { background: rgba(255, 255, 255, 0.04); }
+  .day-card-chart {
+    position: relative;
+    width: 100%;
+    height: 92px;
   }
-  /* Time labels at bottom */
-  .time-overlay {
+
+  /* Chart sub-region inside each day-card.
+     Layout (top to bottom):
+       0–18px : wind speed + arrow combo
+       18–78px: chart canvas
+       78–92px: time labels */
+  .chart-region {
+    position: relative;
+    width: 100%;
+    height: 92px;
+    flex-shrink: 0;
+  }
+
+  /* Wind info (speed + direction arrow) at the top of the chart region */
+  .wind-info-overlay {
     position: absolute;
-    bottom: 0px;
+    top: 0;
     left: 0;
     width: 100%;
-    height: 16px;
+    height: 18px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .wind-info-col {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    line-height: 1;
+    white-space: nowrap;
+    filter: drop-shadow(0 0 3px rgba(13, 20, 38, 0.9));
+    pointer-events: auto;
+    cursor: pointer;
+    padding: 2px 6px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wind-info-col:active {
+    transform: translateX(-50%) scale(1.12);
+    transition: transform 0.1s ease;
+  }
+  .wind-info-col .w-speed {
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    font-weight: 800;
+    font-size: 0.85rem;
+    letter-spacing: -0.02em;
+  }
+  .wind-info-col .w-arrow {
+    font-size: 0.85rem;
+    color: var(--ink);
+  }
+
+  /* Time labels at the bottom of the chart's x-axis */
+  .time-overlay {
+    position: absolute;
+    bottom: 8px;
+    left: 0;
+    width: 100%;
+    height: 14px;
     pointer-events: none;
     z-index: 5;
   }
@@ -472,12 +490,13 @@
     position: absolute;
     bottom: 0;
     transform: translateX(-50%);
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--ink-faint);
     font-weight: 600;
     font-family: 'JetBrains Mono', 'Inter', sans-serif;
     letter-spacing: -0.02em;
     white-space: nowrap;
+    line-height: 1;
   }
 
   .chart-wrapper {
@@ -492,19 +511,14 @@
 
   /* === ALTITUDE PANEL (revealed on expand) === */
   .alt-panel {
-    flex: 1;
-    overflow: hidden;
-    padding: 0 16px;
-    opacity: 0;
-    transition: opacity 0.25s ease;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
+    padding: 12px 16px 4px;
+    border-top: 1px solid var(--line-soft);
+    margin-top: 0;
+    background: transparent;
   }
-  .bottom-sheet.expanded .alt-panel {
-    opacity: 1;
-    transition: opacity 0.25s ease 0.1s;
-  }
+  
+  /* (Per-hour wind speed numbers are rendered directly above the time labels in
+     the .wind-speeds-overlay; see chart-region.) */
   .alt-panel-head {
     display: flex;
     justify-content: space-between;
@@ -586,7 +600,7 @@
     color: var(--ink);
   }
 
-  /* Data source attribution at bottom of sheet (always visible) */
+  /* Data source attribution at bottom of sheet — visible only when expanded */
   .data-source {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.65rem;
@@ -596,6 +610,10 @@
     flex-shrink: 0;
     letter-spacing: 0.04em;
     line-height: 1.4;
+    display: none;  /* hidden when collapsed */
+  }
+  .bottom-sheet.expanded .data-source {
+    display: block;
   }
   .data-source a {
     color: var(--ink-faint);
@@ -711,8 +729,8 @@
     </div>
     <div class="current-weather">
       <div class="current-weather-main">
-        <span class="wind-dir" id="topWindDir">↑</span>
         <span class="wind-speed" id="topWindSpeed">4.5<small>m/s</small></span>
+        <span class="wind-dir" id="topWindDir">↑</span>
       </div>
       <div class="current-weather-sub" id="topWindTime">— —/—(—) —:—</div>
     </div>
@@ -738,33 +756,12 @@
   </div>
 
   <div class="overlay bottom-sheet" id="bottomSheet">
-    <!-- Graph + days-row: scrollable horizontally -->
-    <div class="graph-section">
-      <div class="graph-scroller" id="graphScroller">
-        <div class="graph-scroll-inner">
-          <div class="day-stripes" id="dayStripes"></div>
-          <div class="days-row" id="daysRow"></div>
-          <div class="day-separators" id="daySeparators"></div>
-          <div class="chart-region">
-            <div class="wind-arrows-overlay" id="windArrowsOverlay"></div>
-            <div class="time-overlay" id="timeOverlay"></div>
-            <div class="chart-wrapper">
-              <canvas id="chart7Days"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-      <!-- Floating Y-axis labels — fixed at left, drawn on top of scroll -->
-      <!-- Invisible tap/slide-up zone over days-row, captures gestures -->
-      <div class="days-tap-zone" id="daysTapZone"></div>
-    </div>
-
-    <!-- Altitude profile (revealed when expanded) -->
-    <div class="alt-panel">
-      <div class="alt-panel-head">
-        <span class="alt-panel-title">高度別風速</span>
-      </div>
-      <ul class="alt-list" id="altList"></ul>
+    <!-- Stacked weekly forecast: one day-card per day, then altitude panel at end.
+         When sheet is collapsed, only the first day-card is visible (the rest are
+         hidden via overflow). When expanded, the user can scroll vertically through
+         the remaining 6 days plus the altitude profile. -->
+    <div class="weekly-stack" id="weeklyStack">
+      <!-- day-cards are populated by JS in renderWeeklyStack() -->
     </div>
 
     <!-- Data source attribution — always visible at bottom of sheet -->
@@ -1420,118 +1417,409 @@
       }
     }
 
-    // === RENDER DAYS ROW (in sheet header) + ARROWS + TIME (in scroller) ===
-    const daysRow = document.getElementById('daysRow');
-    const windArrowsOverlay = document.getElementById('windArrowsOverlay');
-    const timeOverlay = document.getElementById('timeOverlay');
+    // === WEEKLY STACK — per-day-card layout ===
+    // Each day has its own Chart.js instance rendered inside its own day-card.
+    // The cards are stacked vertically; only the first one is visible when the
+    // sheet is collapsed. Tapping anywhere expands the sheet to reveal all 7 days.
+    const weeklyStack = document.getElementById('weeklyStack');
+    const dayCharts = [];
+    const dayInfoOverlays = [];
+    const dayTimeOverlays = [];
 
-    function renderDaysAndOverlays() {
-      daysRow.innerHTML = '';
-      windArrowsOverlay.innerHTML = '';
-      timeOverlay.innerHTML = '';
+    const GHOST_HOURS_BEFORE = 1.5;
+    const GHOST_HOURS_AFTER  = 1.5;
 
-      for (let d = 0; d < DAYS; d++) {
-        const midIdx = d * POINTS_PER_DAY + 3;  // index 3 = 13:00 (middle of day)
-        const dayMaxTemp = Math.max(...temps.slice(d * POINTS_PER_DAY, (d + 1) * POINTS_PER_DAY));
-
-        const dayDiv = document.createElement('div');
-        dayDiv.className = 'day-block';
-        dayDiv.dataset.dayIdx = d;
-        dayDiv.innerHTML = `
-          <span class="day-text">${dayLabels[d]}</span>
-          <span class="summary-icon">${icons[midIdx] || '⛅'}</span>
-          <span class="day-temp"><span>${dayMaxTemp}</span>°</span>
-        `;
-        daysRow.appendChild(dayDiv);
+    function dayPoints(values, dayIdx) {
+      const start = dayIdx * POINTS_PER_DAY;
+      const out = [];
+      const first = values[start];
+      const last  = values[start + POINTS_PER_DAY - 1];
+      out.push({ x: FORECAST_HOURS[0] - GHOST_HOURS_BEFORE, y: first != null ? first : 0 });
+      for (let h = 0; h < POINTS_PER_DAY; h++) {
+        out.push({ x: FORECAST_HOURS[h], y: values[start + h] });
       }
+      out.push({ x: FORECAST_HOURS[POINTS_PER_DAY - 1] + GHOST_HOURS_AFTER, y: last != null ? last : 0 });
+      return out;
+    }
 
-      // Arrow + time elements are absolutely positioned to match each chart
-      // data point's x-coordinate. This guarantees pixel-perfect alignment
-      // between dots, vertical day lines, arrows, and time labels.
-      for (let i = 0; i < avgWindSpeeds.length; i++) {
-        const h = i % POINTS_PER_DAY;
-        const arrowEl = document.createElement('div');
-        arrowEl.className = 'wind-arrow-col';
-        arrowEl.dataset.idx = i;
-        arrowEl.innerHTML = windArrow(windDirs[i]);
-        // Make each arrow tap-selectable to the same index as the chart point below
-        arrowEl.addEventListener('click', (e) => {
+    function isGhost(idx) {
+      return idx === 0 || idx === POINTS_PER_DAY + 1;
+    }
+    function pointToRealHour(idx) { return idx - 1; }
+
+    function buildSegmentGradient(ctx, baseRGB, alpha0, alpha1) {
+      const p0 = ctx.p0, p1 = ctx.p1;
+      if (!p0 || !p1) return `rgba(${baseRGB}, ${(alpha0 + alpha1) / 2})`;
+      const canvasCtx = ctx.chart.ctx;
+      const grad = canvasCtx.createLinearGradient(p0.x, 0, p1.x, 0);
+      grad.addColorStop(0, `rgba(${baseRGB}, ${alpha0})`);
+      grad.addColorStop(1, `rgba(${baseRGB}, ${alpha1})`);
+      return grad;
+    }
+    function segmentEndpointAlphas(p0Idx, p1Idx, baseAlpha) {
+      const a0 = isGhost(p0Idx) ? 0 : baseAlpha;
+      const a1 = isGhost(p1Idx) ? 0 : baseAlpha;
+      return [a0, a1];
+    }
+
+    // Per-day overlay-sync plugin: positions wind-info and time-col elements
+    // to match each chart's data point x-coordinates. Runs after each draw so
+    // the overlay always matches Chart.js's internal layout (no race conditions).
+    function makeOverlaySyncPlugin(dayIdx) {
+      return {
+        id: `overlaySync_${dayIdx}`,
+        afterDraw: (chart) => {
+          const meta = chart.getDatasetMeta(1);
+          if (!meta || !meta.data || meta.data.length === 0) return;
+          const infoOverlay = dayInfoOverlays[dayIdx];
+          const timeOverlay = dayTimeOverlays[dayIdx];
+          if (!infoOverlay || !timeOverlay) return;
+          const infos = infoOverlay.querySelectorAll('.wind-info-col');
+          const times = timeOverlay.querySelectorAll('.time-col');
+          for (let h = 0; h < POINTS_PER_DAY; h++) {
+            const point = meta.data[h + 1];
+            if (!point) continue;
+            const px = point.x;
+            if (px <= 0) continue;  // not yet laid out
+            if (infos[h]) infos[h].style.left = px + 'px';
+            if (times[h]) times[h].style.left = px + 'px';
+          }
+        }
+      };
+    }
+
+    function makeDayBoundaryPlugin(dayIdx) {
+      return {
+        id: `dayBoundary_${dayIdx}`,
+        beforeDraw: (chart) => {
+          const {ctx, chartArea} = chart;
+          const yScale = chart.scales.y;
+          if (!yScale || !chartArea) return;
+          const step = pickYStep(yScale.max);
+          const labelValues = [];
+          for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
+            if (v > 0 && v < yScale.max) labelValues.push(v);
+          }
+          ctx.save();
+          ctx.font = "600 9px 'Inter', sans-serif";
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          for (const v of labelValues) {
+            const y = yScale.getPixelForValue(v);
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(240, 230, 210, 0.08)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(0, y);
+            ctx.lineTo(chart.width, y);
+            ctx.stroke();
+            const labelX = 14;
+            ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
+            ctx.fillText(String(v), labelX - 1, y);
+            ctx.fillText(String(v), labelX + 1, y);
+            ctx.fillText(String(v), labelX, y - 1);
+            ctx.fillText(String(v), labelX, y + 1);
+            ctx.fillStyle = 'rgba(240, 230, 210, 0.7)';
+            ctx.fillText(String(v), labelX, y);
+          }
+          const Y_LABEL_RIGHT_PAD = 28;
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(240, 230, 210, 0.25)';
+          ctx.lineWidth = 1;
+          // Primary Y-axis vertical line (right of speed labels)
+          ctx.moveTo(Y_LABEL_RIGHT_PAD + 0.5, chartArea.top);
+          ctx.lineTo(Y_LABEL_RIGHT_PAD + 0.5, chartArea.bottom);
+          // Primary X-axis horizontal line (chart baseline)
+          const xAxisY = Math.round(chartArea.bottom) + 0.5;
+          ctx.moveTo(Y_LABEL_RIGHT_PAD + 0.5, xAxisY);
+          ctx.lineTo(chart.width, xAxisY);
+          ctx.stroke();
+
+          // Unit label "m/s" near the top of the Y-axis
+          ctx.font = "600 8px 'Inter', sans-serif";
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          const unitX = 12;
+          const unitY = Math.max(0, chartArea.top - 10);
+          ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
+          ctx.fillText('m/s', unitX - 1, unitY);
+          ctx.fillText('m/s', unitX + 1, unitY);
+          ctx.fillText('m/s', unitX, unitY - 1);
+          ctx.fillText('m/s', unitX, unitY + 1);
+          ctx.fillStyle = 'rgba(240, 230, 210, 0.55)';
+          ctx.fillText('m/s', unitX, unitY);
+
+          ctx.restore();
+        }
+      };
+    }
+
+    let selectionAnimStart = 0;
+    function triggerSelectionAnim() {
+      selectionAnimStart = performance.now();
+      requestAnimationFrame(function tick() {
+        for (const c of dayCharts) if (c) c.draw();
+        const elapsed = performance.now() - selectionAnimStart;
+        if (elapsed < 1400) requestAnimationFrame(tick);
+      });
+    }
+    function makeSelectionPlugin(dayIdx) {
+      return {
+        id: `selectionLine_${dayIdx}`,
+        afterDatasetsDraw: (chart) => {
+          const selDay = Math.floor(selectedIndex / POINTS_PER_DAY);
+          if (selDay !== dayIdx) return;
+          const selH = selectedIndex % POINTS_PER_DAY;
+          const meta = chart.getDatasetMeta(1);
+          const point = meta.data[selH + 1];
+          if (!point) return;
+          const {ctx, height} = chart;
+          ctx.save();
+          ctx.beginPath();
+          ctx.setLineDash([4, 4]);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+          ctx.lineWidth = 1.5;
+          ctx.moveTo(point.x, 0);
+          ctx.lineTo(point.x, height);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const elapsed = performance.now() - selectionAnimStart;
+          const dotRadius = 5;
+          if (elapsed < 700) {
+            const t = Math.min(1, elapsed / 700);
+            const eased = 1 - Math.pow(1 - t, 3);
+            const ringRadius = dotRadius + 2 + eased * 14;
+            const alpha = (1 - t) * 0.9;
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.lineWidth = 2;
+            ctx.arc(point.x, point.y, ringRadius, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+          ctx.lineWidth = 2;
+          ctx.arc(point.x, point.y, dotRadius + 4, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      };
+    }
+
+    function buildDayCard(dayIdx) {
+      const card = document.createElement('div');
+      card.className = 'day-card';
+      card.dataset.dayIdx = dayIdx;
+      const midIdx = dayIdx * POINTS_PER_DAY + 3;
+      const dayMaxTemp = Math.max(...temps.slice(dayIdx * POINTS_PER_DAY, (dayIdx + 1) * POINTS_PER_DAY));
+      const head = document.createElement('div');
+      head.className = 'day-card-head';
+      head.innerHTML = `
+        <span class="day-text">${dayLabels[dayIdx]}</span>
+        <span class="summary-icon">${icons[midIdx] || '⛅'}</span>
+        <span class="day-temp"><span>${dayMaxTemp}</span>°</span>
+      `;
+      card.appendChild(head);
+
+      // Tap handlers split by area:
+      //   - head (date + temp): toggles sheet expansion / day selection
+      //   - chart area: dot selection takes priority (Chart.js onClick handles it)
+      //
+      // Head behavior:
+      //   - Expanded: tapping selects this day (preserving hour-of-day) and
+      //     collapses the sheet so this day-card becomes the pinned view.
+      //   - Collapsed: tapping toggles the sheet open.
+      const onHeadTap = () => {
+        if (isExpanded) {
+          const hour = selectedIndex % POINTS_PER_DAY;
+          const newIdx = dayIdx * POINTS_PER_DAY + hour;
+          updateSelection(newIdx);
+          scrollToSelectedDay(true);
+          setExpanded(false);
+        } else {
+          setExpanded(true);
+        }
+      };
+      head.addEventListener('click', onHeadTap);
+
+      const chartRegion = document.createElement('div');
+      chartRegion.className = 'day-card-chart chart-region';
+      const infoOverlay = document.createElement('div');
+      infoOverlay.className = 'wind-info-overlay';
+      chartRegion.appendChild(infoOverlay);
+      dayInfoOverlays[dayIdx] = infoOverlay;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'chart-wrapper';
+      const canvas = document.createElement('canvas');
+      wrapper.appendChild(canvas);
+      chartRegion.appendChild(wrapper);
+      const timeOverlay = document.createElement('div');
+      timeOverlay.className = 'time-overlay';
+      chartRegion.appendChild(timeOverlay);
+      dayTimeOverlays[dayIdx] = timeOverlay;
+      card.appendChild(chartRegion);
+      weeklyStack.appendChild(card);
+
+      for (let h = 0; h < POINTS_PER_DAY; h++) {
+        const i = dayIdx * POINTS_PER_DAY + h;
+        const speed = avgWindSpeeds[i];
+        const infoEl = document.createElement('div');
+        infoEl.className = 'wind-info-col';
+        infoEl.dataset.idx = i;
+        infoEl.innerHTML = `
+          <span class="w-speed" style="color:${speedColor(speed)}">${speed.toFixed(1)}</span>
+          <span class="w-arrow">${windArrow(windDirs[i])}</span>
+        `;
+        infoEl.addEventListener('click', (e) => {
+          if (isExpanded) {
+            // Chart area is non-interactive when sheet is open — only the
+            // day-card head is tappable for day selection.
+            e.stopPropagation();
+            return;
+          }
           e.stopPropagation();
           updateSelection(i);
         });
-        windArrowsOverlay.appendChild(arrowEl);
+        infoOverlay.appendChild(infoEl);
 
+        const hour = FORECAST_HOURS[h];
         const timeEl = document.createElement('div');
         timeEl.className = 'time-col';
-        timeEl.dataset.idx = i;
-        const hour = FORECAST_HOURS[h];
         timeEl.textContent = VISIBLE_LABEL_HOURS.has(hour)
           ? String(hour).padStart(2, '0') + ':00'
           : '';
         timeOverlay.appendChild(timeEl);
       }
+
+      const chart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              data: dayPoints(maxWindSpeeds, dayIdx),
+              borderColor: 'rgba(240, 230, 210, 0.7)',
+              borderWidth: 1, borderDash: [4, 3], fill: false, tension: 0.4,
+              pointRadius: 0, pointHoverRadius: 0, pointHitRadius: 0,
+              parsing: false,
+              segment: {
+                borderColor: (ctx) => {
+                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, 0.7);
+                  return buildSegmentGradient(ctx, '240, 230, 210', a0, a1);
+                }
+              }
+            },
+            {
+              data: dayPoints(avgWindSpeeds, dayIdx),
+              borderColor: '#f0e6d2',
+              backgroundColor: 'rgba(240, 230, 210, 0.15)',
+              borderWidth: 2, fill: true, tension: 0.4,
+              pointBackgroundColor: (ctx) => {
+                if (isGhost(ctx.dataIndex)) return 'rgba(0,0,0,0)';
+                const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
+                return speedColor(avgWindSpeeds[realIdx] || 0);
+              },
+              pointBorderColor: (ctx) => {
+                if (isGhost(ctx.dataIndex)) return 'rgba(0,0,0,0)';
+                const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
+                return speedColor(avgWindSpeeds[realIdx] || 0);
+              },
+              pointRadius: (ctx) => {
+                if (isGhost(ctx.dataIndex)) return 0;
+                const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.dataIndex);
+                return realIdx === selectedIndex ? 5 : 3;
+              },
+              pointHitRadius: (ctx) => isGhost(ctx.dataIndex) ? 0 : 25,
+              parsing: false,
+              segment: {
+                borderColor: (ctx) => {
+                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, 1);
+                  return buildSegmentGradient(ctx, '240, 230, 210', a0, a1);
+                },
+                backgroundColor: (ctx) => {
+                  let realIdx = -1;
+                  if (!isGhost(ctx.p0DataIndex)) realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.p0DataIndex);
+                  else if (!isGhost(ctx.p1DataIndex)) realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(ctx.p1DataIndex);
+                  const v = realIdx >= 0 ? avgWindSpeeds[realIdx] : 0;
+                  let rgb, baseA;
+                  if (v >= 4.5)      { rgb = '235, 87, 87';  baseA = 0.45; }
+                  else if (v >= 3.0) { rgb = '224, 168, 80'; baseA = 0.35; }
+                  else               { rgb = '92, 200, 138'; baseA = 0.30; }
+                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, baseA);
+                  return buildSegmentGradient(ctx, rgb, a0, a1);
+                }
+              }
+            }
+          ]
+        },
+        options: {
+          layout: { padding: { left: 0, right: 0, top: 22, bottom: 22 } },
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: {
+            x: {
+              type: 'linear',
+              min: FORECAST_HOURS[0] - GHOST_HOURS_BEFORE,
+              max: FORECAST_HOURS[POINTS_PER_DAY - 1] + GHOST_HOURS_AFTER,
+              grid: { display: false },
+              ticks: { display: false }
+            },
+            y: {
+              grid: { display: false, drawBorder: false },
+              ticks: { display: false, stepSize: 2 },
+              min: -0.6, suggestedMax: 8
+            }
+          },
+          interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          onClick: (e, activeEls) => {
+            // Chart area is non-interactive when the sheet is open
+            if (isExpanded) return;
+            if (activeEls.length === 0) return;
+            const dsIdx = activeEls[0].index;
+            if (isGhost(dsIdx)) return;
+            const realIdx = dayIdx * POINTS_PER_DAY + pointToRealHour(dsIdx);
+            updateSelection(realIdx);
+          }
+        },
+        plugins: [makeDayBoundaryPlugin(dayIdx), makeSelectionPlugin(dayIdx), makeOverlaySyncPlugin(dayIdx)]
+      });
+      dayCharts[dayIdx] = chart;
     }
 
-    // Position the absolutely-placed arrow / time elements to match Chart.js point x
     function syncOverlayPositions() {
-      if (!chart7Days || !chart7Days.scales || !chart7Days.scales.x) return;
-      const meta = chart7Days.getDatasetMeta(1);
-      if (!meta || !meta.data || meta.data.length === 0) return;
-      const xScale = chart7Days.scales.x;
-      const arrows = windArrowsOverlay.querySelectorAll('.wind-arrow-col');
-      const times = timeOverlay.querySelectorAll('.time-col');
-      for (let i = 0; i < meta.data.length; i++) {
-        const px = meta.data[i].x;
-        if (arrows[i]) arrows[i].style.left = px + 'px';
-        if (times[i]) times[i].style.left = px + 'px';
-      }
-      // Size each day-block to match the chart's day boundary x ranges
-      const dayLeftXVal = (d) => d * X_DAY_SPAN - X_DAY_GAP / 2;
-      const blocks = daysRow.querySelectorAll('.day-block');
-      for (let d = 0; d < blocks.length; d++) {
-        const left = xScale.getPixelForValue(dayLeftXVal(d));
-        const right = xScale.getPixelForValue(dayLeftXVal(d + 1));
-        blocks[d].style.width = (right - left) + 'px';
-      }
-      // Draw / update day separator lines at exact chart boundary positions
-      const sepContainer = document.getElementById('daySeparators');
-      if (sepContainer) {
-        // Ensure we have one separator element per inner boundary (DAYS - 1)
-        while (sepContainer.children.length < DAYS - 1) {
-          const sep = document.createElement('div');
-          sep.className = 'day-separator';
-          sepContainer.appendChild(sep);
-        }
-        while (sepContainer.children.length > DAYS - 1) {
-          sepContainer.removeChild(sepContainer.lastChild);
-        }
-        for (let d = 1; d < DAYS; d++) {
-          const px = xScale.getPixelForValue(dayLeftXVal(d));
-          sepContainer.children[d - 1].style.left = px + 'px';
+      for (let d = 0; d < DAYS; d++) {
+        const chart = dayCharts[d];
+        if (!chart || !chart.scales || !chart.scales.x) continue;
+        const meta = chart.getDatasetMeta(1);
+        if (!meta || !meta.data || meta.data.length === 0) continue;
+        const infoOverlay = dayInfoOverlays[d];
+        const timeOverlay = dayTimeOverlays[d];
+        const infos = infoOverlay.querySelectorAll('.wind-info-col');
+        const times = timeOverlay.querySelectorAll('.time-col');
+        for (let h = 0; h < POINTS_PER_DAY; h++) {
+          const point = meta.data[h + 1];
+          if (!point) continue;
+          const px = point.x;
+          if (infos[h]) infos[h].style.left = px + 'px';
+          if (times[h]) times[h].style.left = px + 'px';
         }
       }
-      // Draw day stripes (alternating bg) at exact chart day boundary x ranges
-      const stripeContainer = document.getElementById('dayStripes');
-      if (stripeContainer) {
-        // We render stripes only on odd-indexed days (matches chart's pattern)
-        const oddDays = [];
-        for (let d = 0; d < DAYS; d++) if (d % 2 === 1) oddDays.push(d);
-        while (stripeContainer.children.length < oddDays.length) {
-          const stripe = document.createElement('div');
-          stripe.className = 'day-stripe';
-          stripeContainer.appendChild(stripe);
-        }
-        while (stripeContainer.children.length > oddDays.length) {
-          stripeContainer.removeChild(stripeContainer.lastChild);
-        }
-        for (let i = 0; i < oddDays.length; i++) {
-          const d = oddDays[i];
-          const left = xScale.getPixelForValue(dayLeftXVal(d));
-          const right = xScale.getPixelForValue(dayLeftXVal(d + 1));
-          stripeContainer.children[i].style.left = left + 'px';
-          stripeContainer.children[i].style.width = (right - left) + 'px';
-        }
-      }
+    }
+
+    function renderWeeklyStack() {
+      weeklyStack.innerHTML = '';
+      for (const c of dayCharts) if (c) c.destroy();
+      dayCharts.length = 0;
+      dayInfoOverlays.length = 0;
+      dayTimeOverlays.length = 0;
+      for (let d = 0; d < DAYS; d++) buildDayCard(d);
+      const altPanel = document.createElement('div');
+      altPanel.className = 'alt-panel';
+      altPanel.innerHTML = `
+        <div class="alt-panel-head">
+          <span class="alt-panel-title">高度別風速</span>
+        </div>
+        <ul class="alt-list" id="altList"></ul>
+      `;
+      weeklyStack.appendChild(altPanel);
     }
 
     // === Y-AXIS STEP HELPER ===
@@ -1568,7 +1856,33 @@
         `;
       }).join('');
 
-      // Note: altPanelTime element was removed; timestamp is shown in the top bar
+      // Update the hourly strip — shows the selected day's 7 forecast hours
+      const hourlyEl = document.getElementById('hourlyStrip');
+      if (hourlyEl) {
+        const dayIdx = Math.floor(idx / POINTS_PER_DAY);
+        const activeHourIdx = idx % POINTS_PER_DAY;
+        const cells = [];
+        for (let h = 0; h < POINTS_PER_DAY; h++) {
+          const i = dayIdx * POINTS_PER_DAY + h;
+          if (i >= avgWindSpeeds.length) break;
+          const speed = avgWindSpeeds[i];
+          const color = speedColor(speed);
+          const isActive = h === activeHourIdx;
+          cells.push(`
+            <div class="hourly-cell ${isActive ? 'active' : ''}" data-idx="${i}">
+              <span class="h-speed" style="color:${color}">${speed.toFixed(1)}</span>
+            </div>
+          `);
+        }
+        hourlyEl.innerHTML = cells.join('');
+        hourlyEl.querySelectorAll('.hourly-cell').forEach(el => {
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const i = parseInt(el.dataset.idx, 10);
+            if (!isNaN(i)) updateSelection(i);
+          });
+        });
+      }
     }
 
     function updateSelection(idx) {
@@ -1583,241 +1897,21 @@
       const timeStr = `${String(dt.getHours()).padStart(2,'0')}:00`;
       document.getElementById('topWindTime').textContent = `${dayStr} ${timeStr}`;
       document.getElementById('topWindDir').style.transform = `rotate(${windDirs[idx] + 180}deg)`;
-      // Point styling is handled by scriptable functions (pointBackgroundColor /
-      // pointRadius) on the dataset itself — they read selectedIndex on every draw,
-      // so we just need to trigger a redraw here.
-      chart7Days.update('none');
+      // Point styling is handled by scriptable functions on each day-card chart;
+      // they read selectedIndex on every draw, so we just trigger a redraw on all.
+      for (const c of dayCharts) if (c) c.update('none');
+      // Update stacked-above/below classes so collapsed-state stacking
+      // reflects the new selected day. Skip when expanded to avoid disrupting
+      // the user's view while they're browsing the week.
+      if (typeof applyShutterDelays === 'function' && !isExpanded) {
+        applyShutterDelays(false);
+      }
       // Kick off the expanding-ring animation around the newly selected dot
       triggerSelectionAnim();
       updateAltPanel(idx);
       // Update wind particle animation params
       windFlow.setWind(currentSpeed, windDirs[idx]);
     }
-
-    // === CHART ===
-    const dayBoundaryPlugin = {
-      id: 'dayBoundary',
-      beforeDraw: (chart) => {
-        const {ctx, height} = chart;
-        const xScale = chart.scales.x;
-        const yScale = chart.scales.y;
-        if (!xScale || !yScale) return;
-
-        // Day boundary x positions: midpoint of the inter-day gap.
-        // For day d (1-indexed boundary), midpoint = d * X_DAY_SPAN - X_DAY_GAP/2
-        // Stripe x range for day d: [d*X_DAY_SPAN - X_DAY_GAP/2, (d+1)*X_DAY_SPAN - X_DAY_GAP/2)
-        const dayLeftXVal = (d) => d * X_DAY_SPAN - X_DAY_GAP / 2;
-        const step = pickYStep(yScale.max);
-        const labelValues = [];
-        for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
-          if (v > 0 && v < yScale.max) labelValues.push(v);
-        }
-
-        ctx.save();
-        // === Day stripes + boundary lines ===
-        for (let i = 0; i < DAYS; i++) {
-          const xLeft = xScale.getPixelForValue(dayLeftXVal(i));
-          const xRight = xScale.getPixelForValue(dayLeftXVal(i + 1));
-          if (i % 2 === 1) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
-            ctx.fillRect(xLeft, 0, xRight - xLeft, height);
-          }
-          if (i > 0) {
-            ctx.beginPath();
-            ctx.strokeStyle = 'rgba(240, 230, 210, 0.15)';
-            const x = Math.round(xLeft) - 0.5;
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, height);
-            ctx.stroke();
-          }
-        }
-        // === Horizontal grid lines for y-axis values + label per day ===
-        ctx.font = "600 9px 'Inter', sans-serif";
-        ctx.textBaseline = 'middle';
-        ctx.textAlign = 'left';
-        for (const v of labelValues) {
-          const y = yScale.getPixelForValue(v);
-          // Light horizontal grid line
-          ctx.beginPath();
-          ctx.strokeStyle = 'rgba(240, 230, 210, 0.08)';
-          ctx.lineWidth = 1;
-          ctx.moveTo(0, y);
-          ctx.lineTo(chart.width, y);
-          ctx.stroke();
-          // Label at the right of each day's left boundary
-          for (let i = 0; i < DAYS; i++) {
-            const labelX = Math.round(xScale.getPixelForValue(dayLeftXVal(i))) + 4;
-            const text = String(v);
-            // Halo for readability
-            ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
-            ctx.fillText(text, labelX - 1, y);
-            ctx.fillText(text, labelX + 1, y);
-            ctx.fillText(text, labelX, y - 1);
-            ctx.fillText(text, labelX, y + 1);
-            // Main label
-            ctx.fillStyle = 'rgba(240, 230, 210, 0.7)';
-            ctx.fillText(text, labelX, y);
-          }
-        }
-        ctx.restore();
-      }
-    };
-
-    // Animated state for the selection ring (resets on each selection change)
-    let selectionAnimStart = 0;
-    function triggerSelectionAnim() {
-      selectionAnimStart = performance.now();
-      // Keep redrawing while the animation runs
-      requestAnimationFrame(function tick() {
-        if (chart7Days) chart7Days.draw();
-        const elapsed = performance.now() - selectionAnimStart;
-        if (elapsed < 1400) requestAnimationFrame(tick);
-      });
-    }
-
-    const selectionLinePlugin = {
-      id: 'selectionLine',
-      afterDatasetsDraw: (chart) => {
-        const meta = chart.getDatasetMeta(1);
-        const point = meta.data[selectedIndex];
-        if (!point) return;
-        const {ctx, height} = chart;
-
-        ctx.save();
-        // === Dashed vertical line ===
-        ctx.beginPath();
-        ctx.setLineDash([4, 4]);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.lineWidth = 1.5;
-        ctx.moveTo(point.x, 0);
-        ctx.lineTo(point.x, height);
-        ctx.stroke();
-        ctx.setLineDash([]);  // reset
-
-        // === Animated ring around the selected dot ===
-        // Two phases:
-        //  1) Initial expansion: ring grows from dot radius outward (0 → 350ms)
-        //  2) Continuous gentle pulse: subtle breathing while selected (forever)
-        const elapsed = performance.now() - selectionAnimStart;
-        const dotRadius = 5;  // matches selected pointRadius
-
-        // Phase 1: one-shot expansion ring (fades out as it grows)
-        if (elapsed < 700) {
-          const t = Math.min(1, elapsed / 700);
-          // Ease-out cubic
-          const eased = 1 - Math.pow(1 - t, 3);
-          const ringRadius = dotRadius + 2 + eased * 14;
-          const alpha = (1 - t) * 0.9;
-          ctx.beginPath();
-          ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-          ctx.lineWidth = 2;
-          ctx.arc(point.x, point.y, ringRadius, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        // Phase 2: persistent solid ring around the dot
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
-        ctx.lineWidth = 2;
-        ctx.arc(point.x, point.y, dotRadius + 4, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.restore();
-      }
-    };
-
-    const ctx = document.getElementById('chart7Days').getContext('2d');
-    // === X-POSITION HELPERS ===
-    // Each forecast point sits at a "virtual hour" position. Within a day, points
-    // are evenly spaced by their actual hour. Between days, a virtual gap is
-    // inserted so 19:00 → next-day 07:00 has visible breathing room.
-    const X_DAY_GAP = 4;  // virtual hours of inter-day gap (tweak for visual feel)
-    const X_FIRST = FORECAST_HOURS[0];
-    const X_LAST = FORECAST_HOURS[FORECAST_HOURS.length - 1];
-    const X_DAY_SPAN = (X_LAST - X_FIRST) + X_DAY_GAP;
-    function xPosFor(d, h) {
-      return d * X_DAY_SPAN + (FORECAST_HOURS[h] - X_FIRST);
-    }
-    // Chart's x-axis range
-    const X_MIN = -X_DAY_GAP / 2;
-    const X_MAX = (DAYS - 1) * X_DAY_SPAN + (X_LAST - X_FIRST) + X_DAY_GAP / 2;
-
-    // Build {x, y} pairs from current arrays
-    function pointsFor(values) {
-      return values.map((v, i) => {
-        const d = Math.floor(i / POINTS_PER_DAY);
-        const h = i % POINTS_PER_DAY;
-        return { x: xPosFor(d, h), y: v };
-      });
-    }
-
-    const chart7Days = new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [
-          {
-            data: pointsFor(maxWindSpeeds),
-            borderColor: 'rgba(240, 230, 210, 0.7)',
-            borderWidth: 1, borderDash: [4, 3], fill: false, tension: 0.4,
-            pointRadius: 0, pointHoverRadius: 0, pointHitRadius: 0,
-            parsing: false
-          },
-          {
-            data: pointsFor(avgWindSpeeds),
-            borderColor: '#f0e6d2',
-            backgroundColor: (context) => {
-              const chart = context.chart;
-              const {ctx, chartArea} = chart;
-              if (!chartArea) return 'transparent';
-              const gradient = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-              avgWindSpeeds.forEach((val, i) => {
-                const stop = i / Math.max(1, avgWindSpeeds.length - 1);
-                if (val >= 4.5) gradient.addColorStop(stop, 'rgba(235, 87, 87, 0.45)');
-                else if (val >= 3.0) gradient.addColorStop(stop, 'rgba(224, 168, 80, 0.35)');
-                else gradient.addColorStop(stop, 'rgba(92, 200, 138, 0.30)');
-              });
-              return gradient;
-            },
-            borderWidth: 2, fill: true, tension: 0.4,
-            pointBackgroundColor: (ctx) => {
-              const i = ctx.dataIndex;
-              return speedColor(avgWindSpeeds[i] || 0);
-            },
-            pointBorderColor: (ctx) => {
-              const i = ctx.dataIndex;
-              return speedColor(avgWindSpeeds[i] || 0);
-            },
-            pointRadius: (ctx) => {
-              return ctx.dataIndex === selectedIndex ? 5 : 3;
-            },
-            pointHitRadius: 25,
-            parsing: false
-          }
-        ]
-      },
-      options: {
-        layout: { padding: { left: 0, right: 0, top: 22, bottom: 12 } },
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-        scales: {
-          x: {
-            type: 'linear',
-            min: X_MIN,
-            max: X_MAX,
-            grid: { display: false },
-            ticks: { display: false }
-          },
-          y: {
-            grid: { display: false, drawBorder: false },
-            ticks: { display: false, stepSize: 2 },
-            beginAtZero: true, suggestedMax: 8
-          }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false },
-        onClick: (e, activeEls) => { if (activeEls.length > 0) updateSelection(activeEls[0].index); }
-      },
-      plugins: [dayBoundaryPlugin, selectionLinePlugin]
-    });
 
     // === REFRESH UI AFTER DATA LOADS / CHANGES ===
     let hasInitialSelection = false;
@@ -1826,71 +1920,67 @@
     //   - If now is within today's 7:00–19:00, pick the nearest forecast hour
     //   - If now is past today's 19:00 (or before 7:00), pick tomorrow's 7:00
     function pickIndexForNow() {
-      const now = new Date();
-      const nowMinutes = now.getHours() * 60 + now.getMinutes();
-      // Today's window: 7:00 (420 min) to 19:00 (1140 min)
-      const FIRST_MIN = 7 * 60;
-      const LAST_MIN = 19 * 60;
-      
-      if (nowMinutes >= FIRST_MIN && nowMinutes <= LAST_MIN) {
-        // Within today's forecast window — pick nearest hour from FORECAST_HOURS
-        let bestH = 0;
-        let bestDiff = Infinity;
-        for (let h = 0; h < FORECAST_HOURS.length; h++) {
-          const diff = Math.abs(FORECAST_HOURS[h] * 60 - nowMinutes);
-          if (diff < bestDiff) {
-            bestDiff = diff;
-            bestH = h;
-          }
-        }
-        return 0 * POINTS_PER_DAY + bestH;  // day 0 = today
-      } else {
-        // Outside today's window — point to tomorrow's 7:00 (day 1, hour index 0)
-        return 1 * POINTS_PER_DAY + 0;
-      }
+      // Initial selection: today's earliest forecast hour (07:00).
+      // The user can tap individual hours to drill into specific times.
+      return 0;  // day 0 (today), hour index 0 (07:00)
     }
     
     function refreshAfterDataLoaded() {
-      // Convert raw arrays to {x, y} pairs based on time positions
-      chart7Days.data.datasets[0].data = pointsFor(maxWindSpeeds);
-      chart7Days.data.datasets[1].data = pointsFor(avgWindSpeeds);
+      // Build (or rebuild) the weekly stack with all 7 day-cards
+      renderWeeklyStack();
 
-      // Re-render the days/arrows/time overlays
-      renderDaysAndOverlays();
-
-      // Sync gridline step with new max value
-      const yScale = chart7Days.scales.y;
-      const step = pickYStep(yScale.max);
-      chart7Days.options.scales.y.ticks.stepSize = step;
-
-      // On the first data load (after fetch), pick the time nearest to now.
-      // On subsequent loads (e.g. switching saved points), preserve the current selection
-      // unless it became out of bounds.
+      // First load: pick the time nearest to now; preserve selection on subsequent loads
       const isFirstLoad = !hasInitialSelection;
       if (isFirstLoad) {
         selectedIndex = pickIndexForNow();
         hasInitialSelection = true;
       }
       if (selectedIndex >= avgWindSpeeds.length) selectedIndex = 0;
-      
-      chart7Days.update('none');
+
+      reorderDayCards();
       updateSelection(selectedIndex);
 
-      // Position overlay arrows/time labels to match Chart.js point x-coordinates.
-      requestAnimationFrame(() => {
-        syncOverlayPositions();
-        // On first load, scroll the graph horizontally so the selected point is visible
-        if (isFirstLoad) {
-          const meta = chart7Days.getDatasetMeta(1);
-          if (meta && meta.data && meta.data[selectedIndex]) {
-            const px = meta.data[selectedIndex].x;
-            const scroller = document.getElementById('graphScroller');
-            // Center the selected point in the viewport
-            const targetScroll = Math.max(0, px - scroller.clientWidth / 2);
-            scroller.scrollLeft = targetScroll;
-          }
+      // Position the absolutely-placed overlay elements (speed/arrow/time).
+      // Chart.js's `responsive: true` charts may not have laid out their
+      // pixel positions on the very first frame, so we retry a few times
+      // until each chart's first data point has a non-zero x position.
+      const trySync = (attemptsLeft) => {
+        const ready = dayCharts.every(c => {
+          if (!c) return false;
+          const meta = c.getDatasetMeta(1);
+          return meta && meta.data && meta.data[1] && meta.data[1].x > 0;
+        });
+        if (ready || attemptsLeft <= 0) {
+          syncOverlayPositions();
+        } else {
+          requestAnimationFrame(() => trySync(attemptsLeft - 1));
         }
-      });
+      };
+      requestAnimationFrame(() => trySync(20));
+    }
+
+    // Move the day-card matching `selectedIndex`'s day to the top of weekly-stack
+    // so that when the sheet is collapsed, that day is visible.
+    // Smoothly scroll the weekly-stack so the selected day-card sits at the top
+    // of the visible viewport. When the sheet collapses, this leaves the
+    // selected day-card pinned as the visible row. All 7 day-cards stay in
+    // chronological order; we just adjust scroll position.
+    function scrollToSelectedDay(animate = true) {
+      const selDay = Math.floor(selectedIndex / POINTS_PER_DAY);
+      const card = weeklyStack.querySelector(`.day-card[data-day-idx="${selDay}"]`);
+      if (!card) return;
+      const targetTop = card.offsetTop;
+      if (animate && weeklyStack.scrollTo) {
+        weeklyStack.scrollTo({ top: targetTop, behavior: 'smooth' });
+      } else {
+        weeklyStack.scrollTop = targetTop;
+      }
+    }
+    // Kept for backward compatibility — refresh path calls this.
+    function reorderDayCards() {
+      // Apply stacked classes so collapsed view shows only the selected card
+      applyShutterDelays(false);
+      requestAnimationFrame(() => scrollToSelectedDay(false));
     }
 
     // === LOAD + REFRESH (used at startup and on point change) ===
@@ -1908,28 +1998,16 @@
       }
     }
 
-    // After chart initialized, sync gridline step (labels are drawn by dayBoundaryPlugin)
-    setTimeout(() => {
-      const yScale = chart7Days.scales.y;
-      const step = pickYStep(yScale.max);
-      chart7Days.options.scales.y.ticks.stepSize = step;
-      chart7Days.update('none');
-      // Initial overlay sync (in case data already populated; harmless otherwise)
-      syncOverlayPositions();
-      // Initial fetch — uses initialLat/initialLon resolved during bootstrap
-      loadAndRefresh(initialLat, initialLon);
-    }, 50);
+    // Initial fetch — uses initialLat/initialLon resolved during bootstrap
+    setTimeout(() => loadAndRefresh(initialLat, initialLon), 50);
 
-    // Re-sync overlay positions when the window resizes (Chart.js re-layouts)
+    // Re-sync overlay positions when the window resizes
     window.addEventListener('resize', () => {
-      // Defer to next frame so Chart.js has finished its own resize handling
       requestAnimationFrame(syncOverlayPositions);
     });
 
-    // === BOTTOM SHEET — tap on days area to toggle (drag is disabled) ===
+    // === BOTTOM SHEET — tap on the first day-card head to toggle ===
     const sheet = document.getElementById('bottomSheet');
-    const tapZone = document.getElementById('daysTapZone');
-    const graphScroller = document.getElementById('graphScroller');
     
     // Read actual bottom inset (safe-area or 24px gesture-bar fallback) so we
     // can size the sheet such that content remains fully visible above the
@@ -1948,11 +2026,16 @@
     const SHEET_BOTTOM_PAD = bottomInset();
     
     // Internal content heights (days row + chart, plus alt panel area when expanded)
-    const CONTENT_COLLAPSED = 132;  // days-row 36 + chart 96
-    const CONTENT_EXPANDED = Math.min(window.innerHeight * 0.65, 440);
+    // 1 day-card exactly: 36px header + 92px chart = 128px
+    const CONTENT_COLLAPSED = 128;
+    // Expanded height: leave a bit of map visible at top, fill the rest of the screen
+    const CONTENT_EXPANDED = Math.min(window.innerHeight * 0.88, 880);
     
-    // Total sheet heights include the bottom padding (border-box)
-    const COLLAPSED = CONTENT_COLLAPSED + SHEET_BOTTOM_PAD;
+    // Total sheet heights. The bottom-sheet's CSS padding-bottom is included
+    // via box-sizing: border-box, so the height value here IS the visible card
+    // area. We deliberately do NOT add SHEET_BOTTOM_PAD when collapsed so the
+    // sheet height matches the day-card height exactly (per design).
+    const COLLAPSED = CONTENT_COLLAPSED;
     const EXPANDED = CONTENT_EXPANDED + SHEET_BOTTOM_PAD;
 
     document.documentElement.style.setProperty('--sheet-collapsed-h', COLLAPSED + 'px');
@@ -1964,102 +2047,26 @@
       isExpanded = expanded;
       sheet.classList.toggle('expanded', expanded);
       document.documentElement.style.setProperty('--sheet-h', (expanded ? EXPANDED : COLLAPSED) + 'px');
-    }
-
-    // === Gesture handling — tap toggles, horizontal drag scrolls graph ===
-    // Vertical drag intentionally disabled (per user request).
-    
-    const TAP_MAX_MOVE_PX = 8;
-    const TAP_MAX_DURATION_MS = 500;
-    
-    let pointerActive = false;
-    let pointerStartX = 0;
-    let pointerStartY = 0;
-    let pointerStartTime = 0;
-    let intent = null;  // null | 'horizontal'
-    let startScrollLeft = 0;
-    let totalMoveX = 0;
-    let totalMoveY = 0;
-
-    function onPointerDown(e) {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      pointerActive = true;
-      pointerStartX = e.clientX;
-      pointerStartY = e.clientY;
-      pointerStartTime = Date.now();
-      intent = null;
-      totalMoveX = 0;
-      totalMoveY = 0;
-      startScrollLeft = graphScroller.scrollLeft;
-      try { tapZone.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-    }
-
-    function onPointerMove(e) {
-      if (!pointerActive) return;
-      const dx = e.clientX - pointerStartX;
-      const dy = e.clientY - pointerStartY;
-      totalMoveX = dx;
-      totalMoveY = dy;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-
-      // Decide intent once movement is meaningful
-      if (intent === null) {
-        if (adx > TAP_MAX_MOVE_PX || ady > TAP_MAX_MOVE_PX) {
-          // Only act on horizontal motion; vertical motion is ignored (no drag-to-open)
-          if (adx > ady) {
-            intent = 'horizontal';
-          } else {
-            // Vertical motion → cancel the gesture entirely (don't trigger tap, don't drag)
-            intent = 'cancelled';
-          }
+      requestAnimationFrame(() => {
+        for (const c of dayCharts) if (c) c.resize();
+        syncOverlayPositions();
+        if (expanded) {
+          // Opening — always scroll to today (day 0) at top so the user
+          // sees today first, with future days below and ability to scroll
+          // up if needed for past content. The natural CSS height transition
+          // (~320ms) takes care of the smooth reveal.
+          weeklyStack.scrollTop = 0;
         } else {
-          return;
+          // Closing — snap to the selected day's row so it's the visible
+          // pinned card after the height transition completes.
+          setTimeout(() => scrollToSelectedDay(false), 350);
         }
-      }
-
-      if (intent === 'horizontal') {
-        graphScroller.scrollLeft = startScrollLeft - dx;
-        if (e.cancelable) e.preventDefault();
-      }
-      // intent === 'cancelled' or vertical → do nothing, let browser handle
+      });
     }
 
-    function onPointerEnd(e) {
-      if (!pointerActive) return;
-      pointerActive = false;
-      try { tapZone.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-      
-      const elapsed = Date.now() - pointerStartTime;
-      const adx = Math.abs(totalMoveX);
-      const ady = Math.abs(totalMoveY);
-      
-      if (intent === null && adx <= TAP_MAX_MOVE_PX && ady <= TAP_MAX_MOVE_PX && elapsed <= TAP_MAX_DURATION_MS) {
-        // It's a tap — toggle expand state
-        setExpanded(!isExpanded);
-      }
-      // Otherwise (horizontal swipe or cancelled vertical motion) — do nothing
-      
-      intent = null;
-    }
-
-    if (window.PointerEvent) {
-      tapZone.addEventListener('pointerdown', onPointerDown);
-      tapZone.addEventListener('pointermove', onPointerMove);
-      tapZone.addEventListener('pointerup', onPointerEnd);
-      tapZone.addEventListener('pointercancel', onPointerEnd);
-    } else {
-      tapZone.addEventListener('touchstart', (e) => {
-        const t = e.touches[0];
-        onPointerDown({ clientX: t.clientX, clientY: t.clientY, pointerId: 1, pointerType: 'touch', button: 0 });
-      }, { passive: false });
-      tapZone.addEventListener('touchmove', (e) => {
-        const t = e.touches[0];
-        onPointerMove({ clientX: t.clientX, clientY: t.clientY, cancelable: e.cancelable, preventDefault: () => e.preventDefault() });
-      }, { passive: false });
-      tapZone.addEventListener('touchend', () => onPointerEnd({ pointerId: 1 }));
-      tapZone.addEventListener('touchcancel', () => onPointerEnd({ pointerId: 1 }));
-    }
+    // Tap-to-toggle handled by each day-card-head's click listener (see buildDayCard).
+    // No separate gesture handler needed — vertical scroll inside the expanded sheet
+    // works natively via the .weekly-stack overflow-y: auto.
 
     // Initial sheet height var for FAB positioning
     document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
