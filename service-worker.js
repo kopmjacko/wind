@@ -1,10 +1,11 @@
 // wind. service worker — offline app shell + smart caching for runtime resources
 // Strategy:
-//   - App shell (HTML, manifest, icons) → cache-first, updated on activate
+//   - HTML (index.html) → network-first (so updates reach users on next visit)
+//   - Other shell assets (manifest, icons) → cache-first
 //   - Map tiles (CARTO Voyager) → stale-while-revalidate, capped LRU cache
 //   - Forecast API (Open-Meteo) → network-first, fallback to cache when offline
 //   - Third-party libs (Leaflet, Chart.js, Google Fonts) → cache-first
-const CACHE_VERSION = 'v30-1';
+const CACHE_VERSION = 'v30-2';
 const SHELL_CACHE = `wind-shell-${CACHE_VERSION}`;
 const TILES_CACHE = `wind-tiles-${CACHE_VERSION}`;
 const API_CACHE   = `wind-api-${CACHE_VERSION}`;
@@ -51,11 +52,33 @@ async function trimCache(cacheName, maxItems) {
   }
 }
 
+// Detect "navigation" requests (loading the HTML page itself)
+function isNavigationRequest(req) {
+  return req.mode === 'navigate' ||
+         (req.method === 'GET' && req.headers.get('accept') && req.headers.get('accept').includes('text/html'));
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
+
+  // === HTML page navigation — NETWORK-FIRST so updates are picked up immediately ===
+  if (url.origin === self.location.origin && isNavigationRequest(req)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const clone = res.clone();
+            caches.open(SHELL_CACHE).then((cache) => cache.put(req, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((cached) => cached || caches.match('./index.html')))
+    );
+    return;
+  }
 
   // === Map tiles (CARTO) — stale-while-revalidate ===
   if (/basemaps\.cartocdn\.com/.test(url.host)) {
@@ -107,17 +130,17 @@ self.addEventListener('fetch', (event) => {
           if (res && res.status === 200) cache.put(req, res.clone());
           return res;
         } catch {
-          return cached;  // may be undefined if never cached
+          return cached;
         }
       })
     );
     return;
   }
 
-  // === Same-origin (app shell) — cache-first with network fallback ===
+  // === Other same-origin assets (icons, manifest) — cache-first ===
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then((cached) => cached || fetch(req).catch(() => caches.match('./index.html')))
+      caches.match(req).then((cached) => cached || fetch(req))
     );
     return;
   }
