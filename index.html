@@ -1,0 +1,2083 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>wind.</title>
+
+<!-- PWA -->
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#0d1426">
+<meta name="description" content="パラモーター向け風況モニター - 気象庁MSM">
+
+<!-- iOS Web App -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="wind.">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+
+<!-- Standard favicon -->
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="./icon-512.png">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+  :root, [data-theme="dark"] {
+    --paper: #0d1426;
+    --paper-elev: #16213d;
+    --paper-overlay: rgba(13, 20, 38, 0.9);
+    --paper-solid: rgba(13, 20, 38, 0.96);
+    --ink: #f0e6d2;
+    --ink-faint: #8a7e62;
+    --gold: #e0a850;
+    --green: #5cc88a;
+    --alert: #eb5757;
+    --line: rgba(240, 230, 210, 0.15);
+    --line-soft: rgba(240, 230, 210, 0.08);
+    --bg-alt: rgba(255, 255, 255, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body, html {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden;
+    background: var(--paper); color: var(--ink);
+    font-family: 'Inter', 'Noto Sans JP', sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #map {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;
+    background: #e8eef0;
+  }
+
+  /* Wind flow particles canvas — pinned to viewport, sits above map tiles, below all overlays */
+  #windCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .overlay {
+    position: absolute; z-index: 10;
+    background: var(--paper-overlay);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+  }
+
+  /* === TOP BAR — edge-to-edge, no rounded corners === */
+  .top-bar {
+    top: 0;
+    left: 0;
+    right: 0;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    /* Account for iOS notch via safe-area, but visually flush to edges */
+    padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  }
+  /* Alert state — only the badge appears; no bar background or pulse animation */
+  .brand-mark { font-family: 'DM Serif Display', serif; font-size: 18px; font-style: italic; }
+  .brand-mark .dot { color: var(--gold); }
+  
+  /* Location name — clickable when more than one saved point */
+  .location-name-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--ink);
+    cursor: default;
+    padding: 2px 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .location-name-wrapper.has-options {
+    cursor: pointer;
+  }
+  .location-name-wrapper.has-options:active {
+    opacity: 0.7;
+  }
+  .location-name { font-weight: 700; font-size: 0.95rem; }
+  .dropdown-caret {
+    display: none;
+    width: 10px;
+    height: 10px;
+    color: var(--ink-faint);
+    transition: transform 0.2s;
+  }
+  .location-name-wrapper.has-options .dropdown-caret { display: inline-block; }
+  .location-name-wrapper.open .dropdown-caret { transform: rotate(180deg); }
+  
+  .location-meta { font-size: 0.6rem; color: var(--ink-faint); font-family: monospace; }
+  
+  /* Dropdown menu — shown when location is tapped (with multiple saved points) */
+  .location-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 1px;
+    min-width: 200px;
+    max-width: 300px;
+    background: var(--paper-elev, #16213d);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 50;
+    display: none;
+    overflow: hidden;
+  }
+  .location-dropdown.show { display: block; }
+  .location-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--line-soft, rgba(240, 230, 210, 0.06));
+    transition: background 0.1s;
+  }
+  .location-option:last-child { border-bottom: none; }
+  .location-option:active,
+  .location-option.active {
+    background: rgba(224, 168, 80, 0.12);
+  }
+  .location-option-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .location-option.active .location-option-name {
+    color: var(--gold);
+  }
+  .location-option-delete {
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-faint);
+    border-radius: 50%;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .location-option-delete:active,
+  .location-option-delete:hover {
+    background: rgba(235, 87, 87, 0.15);
+    color: var(--alert);
+  }
+  .location-option-delete svg {
+    width: 14px; height: 14px;
+    stroke-width: 2;
+  }
+
+  .current-weather { text-align: right; }
+  .current-weather-main {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    color: var(--ink);
+    justify-content: flex-end;
+    line-height: 1;
+  }
+  .wind-dir {
+    font-size: 1.4rem;
+    display: inline-block;
+    transition: transform 0.3s ease;
+    align-self: center;
+  }
+  .wind-speed {
+    font-size: 2.6rem;
+    font-weight: 800;
+    line-height: 0.9;
+    letter-spacing: -0.03em;
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+  }
+  .wind-speed small {
+    font-family: 'Inter', sans-serif;
+    font-style: normal;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--ink-faint);
+    margin-left: 2px;
+  }
+  .current-weather-sub {
+    font-family: 'JetBrains Mono', 'Inter', monospace;
+    font-size: 0.7rem;
+    color: var(--gold);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-top: 6px;
+  }
+  /* === CENTER PULSE MARKER === */
+  .center-marker {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    pointer-events: none;
+    width: 80px; height: 80px;
+  }
+  .center-marker .pulse {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--gold);
+    opacity: 0.7;
+    animation: pulse 2s ease-out infinite;
+  }
+  .center-marker .pulse:nth-child(2) { animation-delay: 0.6s; }
+  .center-marker .pulse:nth-child(3) { animation-delay: 1.2s; }
+  @keyframes pulse {
+    0% { width: 16px; height: 16px; opacity: 0.7; }
+    100% { width: 80px; height: 80px; opacity: 0; }
+  }
+  .center-marker .core {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--gold);
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5);
+  }
+
+  /* === FLOATING ACTION BUTTONS === */
+  .fab-stack {
+    position: absolute;
+    z-index: 8;
+    right: 12px;
+    bottom: calc(var(--sheet-h, 130px) + 12px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: bottom 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .fab {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--paper-overlay);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    transition: transform 0.15s ease;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+  }
+  .fab:active { transform: scale(0.92); }
+  .fab.primary { color: var(--gold); }
+  .fab svg { width: 20px; height: 20px; }
+
+  /* === BOTTOM SHEET — edge to edge, no rounded corners, no handle === */
+  :root { --sheet-collapsed-h: 130px; --sheet-expanded-h: 380px; }
+
+  .bottom-sheet {
+    bottom: 0; left: 0; width: 100%;
+    border-radius: 0;       /* edge to edge */
+    /* Bottom padding: at least 32px clearance for Android gesture bar / iOS home bar.
+       max() ensures we use whichever is greater between the safe-area inset and 32px. */
+    padding: 0 0 max(env(safe-area-inset-bottom, 0px), 32px);
+    box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.6);
+    border: none;
+    border-top: 1px solid var(--line);
+    height: var(--sheet-collapsed-h);
+    transition: height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .bottom-sheet.expanded {
+    height: var(--sheet-expanded-h);
+  }
+
+  /* === DAYS ROW (tap + slide-up handle, scrolls with graph) === */
+  /* Lives inside the scroll inner so each day cell has 1800/7 = ~257px of room */
+  .days-row {
+    display: flex;
+    width: 100%;
+    height: 36px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 5;
+  }
+  .day-block {
+    /* Width is set inline by JS to match the chart's day boundary positions */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+  /* Day-block backgrounds are drawn separately as absolute-positioned stripes
+     so they align with the chart's day boundaries (see .day-stripes below). */
+  
+  /* Striped backgrounds spanning days-row, drawn as absolutely-positioned elements
+     placed at the same x ranges as the chart's day boundaries. */
+  .day-stripes {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 36px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .day-stripe {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--bg-alt);
+  }
+  
+  /* Vertical separator lines spanning from days-row through the chart, drawn as
+     absolutely positioned elements. JS sets each one's `left` to match the
+     chart's day boundary so days-row separators align perfectly with chart lines. */
+  .day-separators {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 36px;  /* same as days-row */
+    pointer-events: none;
+    z-index: 6;
+  }
+  .day-separator {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--line);
+    transform: translateX(-0.5px);
+  }
+  .day-text { font-size: 0.95rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
+  .summary-icon { font-size: 1rem; }
+  .day-temp { font-size: 0.75rem; font-weight: 600; color: var(--ink-faint); }
+  .day-temp span { color: var(--ink); }
+  
+  /* The tap-zone overlay: invisible, full-width, sits above the days-row in the
+     non-scrolling layer. Captures taps and slide-up gestures to expand the sheet,
+     while letting horizontal swipes pass through to the inner scroller. */
+  .days-tap-zone {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 36px;
+    z-index: 8;
+    cursor: pointer;
+  }
+  .days-tap-zone:active { background: rgba(255, 255, 255, 0.04); }
+
+  /* === GRAPH AREA — horizontally scrollable === */
+  /* === GRAPH AREA — scrolls horizontally, contains days + chart === */
+  .graph-section {
+    position: relative;
+    width: 100%;
+    /* 36px days-row + 96px chart = 132px total */
+    height: 132px;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .graph-scroller {
+    width: 100%;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .graph-scroller::-webkit-scrollbar { display: none; }
+  .graph-scroll-inner {
+    width: 1800px;
+    height: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  /* The chart sub-region inside the scroll inner */
+  .chart-region {
+    position: relative;
+    width: 100%;
+    height: 96px;
+    flex-shrink: 0;
+  }
+
+  /* Wind direction arrows above chart */
+  .wind-arrows-overlay {
+    position: absolute;
+    top: 4px;
+    left: 0;
+    width: 100%;
+    height: 24px;
+    pointer-events: none;  /* container ignores clicks; children opt back in */
+    z-index: 5;
+  }
+  .wind-arrow-col {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    /* Width/height of tap target — content centered inside */
+    width: 32px;
+    height: 32px;
+    margin-top: -4px;  /* extend tap area slightly above */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    line-height: 1;
+    color: var(--ink);
+    filter: drop-shadow(0 0 3px rgba(13, 20, 38, 0.9));
+    white-space: nowrap;
+    pointer-events: auto;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wind-arrow-col:active {
+    transform: translateX(-50%) scale(1.15);
+    transition: transform 0.1s ease;
+  }
+  /* Time labels at bottom */
+  .time-overlay {
+    position: absolute;
+    bottom: 0px;
+    left: 0;
+    width: 100%;
+    height: 16px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .time-col {
+    position: absolute;
+    bottom: 0;
+    transform: translateX(-50%);
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    font-weight: 600;
+    font-family: 'JetBrains Mono', 'Inter', sans-serif;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+
+  .chart-wrapper {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+  }
+
+  /* Y-axis labels are now drawn inside the chart canvas alongside day boundaries */
+
+  /* === ALTITUDE PANEL (revealed on expand) === */
+  .alt-panel {
+    flex: 1;
+    overflow: hidden;
+    padding: 0 16px;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .bottom-sheet.expanded .alt-panel {
+    opacity: 1;
+    transition: opacity 0.25s ease 0.1s;
+  }
+  .alt-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 0 10px;
+    border-bottom: 1px solid var(--line-soft);
+    flex-shrink: 0;
+  }
+  .alt-panel-title {
+    font-family: 'Inter', 'Noto Sans JP', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .alt-list {
+    list-style: none;
+    margin: 0; padding: 0;
+    overflow: hidden;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .alt-list li {
+    display: grid;
+    grid-template-columns: 60px 1fr auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+    flex: 1;
+    min-height: 0;
+  }
+  .alt-list li:last-child { border-bottom: none; }
+  .alt-h {
+    font-family: 'Inter', 'Noto Sans JP', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .alt-bar-track {
+    height: 4px;
+    background: rgba(240, 230, 210, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+  .alt-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease, background 0.3s ease;
+  }
+  .alt-v {
+    /* Match the top-right wind speed style for visual consistency */
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    font-weight: 800;
+    font-size: 1.4rem;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    text-align: right;
+    min-width: 60px;
+  }
+  .alt-v .u {
+    font-family: 'Inter', sans-serif;
+    font-style: normal;
+    font-size: 0.6rem;
+    color: var(--ink-faint);
+    margin-left: 2px;
+    font-weight: 600;
+  }
+  .alt-arr {
+    font-size: 1.1rem;
+    width: 20px;
+    text-align: center;
+    color: var(--ink);
+  }
+
+  /* Data source attribution at bottom of sheet (always visible) */
+  .data-source {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--ink-faint);
+    text-align: right;
+    padding: 8px 16px 4px;
+    flex-shrink: 0;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .data-source a {
+    color: var(--ink-faint);
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(240, 230, 210, 0.3);
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .data-source a:hover,
+  .data-source a:active {
+    color: var(--gold);
+    border-bottom-color: var(--gold);
+  }
+
+  .leaflet-control-zoom { display: none; }
+  .leaflet-control-attribution {
+    background: rgba(255, 255, 255, 0.85) !important;
+    color: rgba(60, 60, 60, 0.7) !important;
+    font-size: 9px !important;
+  }
+  .leaflet-control-attribution a { color: rgba(60, 60, 60, 0.9) !important; }
+
+  /* === REGISTER MODAL === */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 100;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--paper-elev);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    max-width: 360px; width: 100%;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .modal h3 {
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    margin: 0 0 4px;
+    font-size: 1.2rem;
+  }
+  .modal .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--ink-faint);
+    margin-bottom: 14px;
+  }
+  .modal label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .modal input {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+  }
+  .modal input:focus { outline: none; border-color: var(--gold); }
+  .modal-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+  }
+  .btn {
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .btn.ghost {
+    background: transparent;
+    color: var(--ink);
+  }
+</style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <canvas id="windCanvas"></canvas>
+
+  <div class="center-marker">
+    <div class="pulse"></div>
+    <div class="pulse"></div>
+    <div class="pulse"></div>
+    <div class="core"></div>
+  </div>
+
+  <div class="overlay top-bar" id="topBar">
+    <div style="position: relative;">
+      <div class="brand-mark">wind<span class="dot">.</span></div>
+      <div class="location-name-wrapper" id="locationNameWrapper">
+        <span class="location-name" id="locationName">フライトエリア</span>
+        <svg class="dropdown-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="location-meta" id="locationMeta">36.04°N · 139.89°E</div>
+      <!-- Dropdown menu (hidden by default, shown when locationNameWrapper is tapped) -->
+      <div class="location-dropdown" id="locationDropdown"></div>
+    </div>
+    <div class="current-weather">
+      <div class="current-weather-main">
+        <span class="wind-dir" id="topWindDir">↑</span>
+        <span class="wind-speed" id="topWindSpeed">4.5<small>m/s</small></span>
+      </div>
+      <div class="current-weather-sub" id="topWindTime">— —/—(—) —:—</div>
+    </div>
+  </div>
+
+  <div class="fab-stack" id="fabStack">
+    <button class="fab" id="fabRecenter" aria-label="観測地点に戻る">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <line x1="12" y1="3" x2="12" y2="6"/>
+        <line x1="12" y1="18" x2="12" y2="21"/>
+        <line x1="3" y1="12" x2="6" y2="12"/>
+        <line x1="18" y1="12" x2="21" y2="12"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+      </svg>
+    </button>
+    <button class="fab primary" id="fabRegister" aria-label="この地点を登録">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="overlay bottom-sheet" id="bottomSheet">
+    <!-- Graph + days-row: scrollable horizontally -->
+    <div class="graph-section">
+      <div class="graph-scroller" id="graphScroller">
+        <div class="graph-scroll-inner">
+          <div class="day-stripes" id="dayStripes"></div>
+          <div class="days-row" id="daysRow"></div>
+          <div class="day-separators" id="daySeparators"></div>
+          <div class="chart-region">
+            <div class="wind-arrows-overlay" id="windArrowsOverlay"></div>
+            <div class="time-overlay" id="timeOverlay"></div>
+            <div class="chart-wrapper">
+              <canvas id="chart7Days"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Floating Y-axis labels — fixed at left, drawn on top of scroll -->
+      <!-- Invisible tap/slide-up zone over days-row, captures gestures -->
+      <div class="days-tap-zone" id="daysTapZone"></div>
+    </div>
+
+    <!-- Altitude profile (revealed when expanded) -->
+    <div class="alt-panel">
+      <div class="alt-panel-head">
+        <span class="alt-panel-title">高度別風速</span>
+      </div>
+      <ul class="alt-list" id="altList"></ul>
+    </div>
+
+    <!-- Data source attribution — always visible at bottom of sheet -->
+    <div class="data-source">
+      <a href="https://www.jma.go.jp/jma/kishou/know/whitep/1-3-7.html" target="_blank" rel="noopener">気象庁 MSM</a>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="registerModal">
+    <div class="modal">
+      <h3>この地点を登録</h3>
+      <div class="meta" id="modalCoord"></div>
+      <label>地点名</label>
+      <input type="text" id="pointName" placeholder="例: 坂東フィールド" maxlength="30">
+      <div class="modal-actions">
+        <button class="btn ghost" id="modalCancel">キャンセル</button>
+        <button class="btn" id="modalSave">登録</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    // === MAP ===
+    const DEFAULT_LATLNG = [36.0479, 139.8979];
+    const STORAGE_KEY = 'wind_paramotor_points_v1';
+    
+    const map = L.map('map', { zoomControl: false }).setView(DEFAULT_LATLNG, 12);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap, © CARTO'
+    }).addTo(map);
+
+    // === WIND FLOW PARTICLES (Windy-style overlay) ===
+    const windFlow = (() => {
+      const canvas = document.getElementById('windCanvas');
+      const ctx = canvas.getContext('2d');
+      let dpr = window.devicePixelRatio || 1;
+      let width = 0, height = 0;
+      let particles = [];
+      const COUNT = 200;           // dense enough to always see flow on screen
+      const TRAIL_FADE = 0.04;     // gentler fade for longer streaks
+      let speed = 2.0;             // m/s
+      let dir = 0;                 // meteorological "from" direction in degrees
+      let rafId = null;
+      let initialized = false;
+
+      function getViewport() {
+        // Prefer visualViewport (handles mobile address bar correctly), fall back to window.
+        if (window.visualViewport) {
+          return {
+            w: window.visualViewport.width,
+            h: window.visualViewport.height
+          };
+        }
+        return { w: window.innerWidth, h: window.innerHeight };
+      }
+
+      function resize() {
+        // Use the canvas's own client dimensions — most reliable across mobile browsers
+        const newW = canvas.clientWidth || window.innerWidth;
+        const newH = canvas.clientHeight || window.innerHeight;
+        if (Math.abs(newW - width) < 1 && Math.abs(newH - height) < 1 && initialized) {
+          return false;
+        }
+        width = newW;
+        height = newH;
+        // Match canvas drawing buffer to its CSS size (1:1, no DPR scaling for simplicity)
+        canvas.width = width;
+        canvas.height = height;
+        initialized = true;
+        return true;
+      }
+
+      function spawn(p, freshArea) {
+        // freshArea: if true, spawn anywhere; else spawn just upstream (off-screen)
+        if (freshArea) {
+          p.x = Math.random() * width;
+          p.y = Math.random() * height;
+        } else {
+          // Determine which edge is upstream from current wind direction
+          const toDir = (dir + 180) % 360;
+          const rad = (toDir - 90) * Math.PI / 180;
+          const dxSign = Math.cos(rad);
+          const dySign = Math.sin(rad);
+          if (Math.abs(dxSign) > Math.abs(dySign)) {
+            p.x = dxSign > 0 ? -8 : width + 8;
+            p.y = Math.random() * height;
+          } else {
+            p.x = Math.random() * width;
+            p.y = dySign > 0 ? -8 : height + 8;
+          }
+        }
+        p.life = 180 + Math.random() * 180;  // 180–360 frames ≈ 3–6 seconds at 60 fps
+        p.age = Math.random() * p.life * 0.5;  // stagger ages on initial fill
+      }
+
+      function init() {
+        resize();
+        particles = [];
+        for (let i = 0; i < COUNT; i++) {
+          const p = {};
+          spawn(p, true);
+          particles.push(p);
+        }
+      }
+
+      function setWind(s, d) {
+        speed = Math.max(0.3, s);
+        dir = d;
+      }
+
+      function colorForSpeed(s) {
+        if (s >= 4.5) return 'rgba(235, 87, 87, ALPHA)';
+        if (s >= 3.0) return 'rgba(224, 168, 80, ALPHA)';
+        return 'rgba(92, 200, 138, ALPHA)';
+      }
+
+      function step() {
+        if (width === 0 || height === 0) {
+          rafId = requestAnimationFrame(step);
+          return;
+        }
+
+        const toDir = (dir + 180) % 360;
+        const rad = (toDir - 90) * Math.PI / 180;
+        const pxPerFrame = 0.2 + speed * 0.2;
+        const dx = Math.cos(rad) * pxPerFrame;
+        const dy = Math.sin(rad) * pxPerFrame;
+
+        // Fade trails
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = `rgba(0, 0, 0, ${TRAIL_FADE})`;
+        ctx.fillRect(0, 0, width, height);
+        ctx.globalCompositeOperation = 'source-over';
+
+        const baseColor = colorForSpeed(speed);
+        ctx.lineCap = 'round';
+        // Margin (in px) inside which particles fade in/out — keeps soft edges
+        const FADE_MARGIN = Math.min(80, Math.min(width, height) * 0.15);
+
+        for (const p of particles) {
+          const oldX = p.x;
+          const oldY = p.y;
+          p.x += dx;
+          p.y += dy;
+
+          // Respawn ONLY when the particle has fully exited the canvas
+          // (no life-based death — particles always traverse the whole screen)
+          if (p.x < -10 || p.x > width + 10 || p.y < -10 || p.y > height + 10) {
+            spawn(p, false);  // re-enter from upstream edge
+            continue;
+          }
+
+          // Alpha fades softly near the four canvas edges so streaks don't
+          // appear/disappear with hard cuts.
+          const distLeft = p.x;
+          const distRight = width - p.x;
+          const distTop = p.y;
+          const distBottom = height - p.y;
+          const minEdge = Math.min(distLeft, distRight, distTop, distBottom);
+          const edgeFade = Math.min(1, minEdge / FADE_MARGIN);
+          const alpha = 0.7 * edgeFade;
+          if (alpha <= 0) continue;
+
+          ctx.strokeStyle = baseColor.replace('ALPHA', alpha.toFixed(2));
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(oldX, oldY);
+          ctx.lineTo(p.x, p.y);
+          ctx.stroke();
+        }
+
+        rafId = requestAnimationFrame(step);
+      }
+
+      function start() {
+        if (rafId) cancelAnimationFrame(rafId);
+        init();
+        step();
+      }
+
+      // Handle viewport changes carefully: only re-spawn particles that fall outside,
+      // never reset the canvas if dimensions haven't changed.
+      function onViewportChange() {
+        const changed = resize();
+        if (changed) {
+          // Bring stray particles back inside; keep their motion continuous
+          for (const p of particles) {
+            if (p.x < -10 || p.x > width + 10 || p.y < -10 || p.y > height + 10) {
+              spawn(p, true);
+            }
+          }
+        }
+      }
+
+      window.addEventListener('resize', onViewportChange);
+      window.addEventListener('orientationchange', onViewportChange);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', onViewportChange);
+      }
+      // Re-fit shortly after first paint (mobile Chrome's address bar collapse, etc.)
+      setTimeout(onViewportChange, 300);
+      setTimeout(onViewportChange, 1000);
+
+      // Page visibility: pause when hidden so trails don't decay to nothing on return
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+        } else if (!rafId) {
+          step();
+        }
+      });
+
+      return { start, setWind };
+    })();
+    windFlow.start();
+
+    // === SAVED POINTS STATE ===
+    // Each point: { id, name, lat, lon }
+    let savedPoints = [];
+    let activePointId = null;  // id of currently-selected saved point (or null = no saved point active)
+    
+    function loadSavedPoints() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            savedPoints = parsed;
+            // Restore last-active if any was marked default
+            const def = savedPoints.find(p => p.isDefault);
+            if (def) activePointId = def.id;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load saved points', e);
+      }
+    }
+    function persistSavedPoints() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPoints));
+      } catch (e) { /* ignore */ }
+    }
+    
+    // === LOCATION NAME UI ===
+    const locationNameEl = document.getElementById('locationName');
+    const locationNameWrapper = document.getElementById('locationNameWrapper');
+    const locationDropdown = document.getElementById('locationDropdown');
+    
+    function getActivePoint() {
+      return savedPoints.find(p => p.id === activePointId) || null;
+    }
+    
+    function refreshTopBarName() {
+      const active = getActivePoint();
+      if (active) {
+        locationNameEl.textContent = active.name;
+      } else {
+        locationNameEl.textContent = 'フライトエリア';
+      }
+      // Show dropdown caret only when there are 2+ saved points, OR
+      // at least 1 saved point (so user can switch / view their list).
+      if (savedPoints.length >= 1) {
+        locationNameWrapper.classList.add('has-options');
+      } else {
+        locationNameWrapper.classList.remove('has-options');
+      }
+    }
+    
+    function refreshDropdownMenu() {
+      if (savedPoints.length === 0) {
+        locationDropdown.innerHTML = '';
+        return;
+      }
+      locationDropdown.innerHTML = savedPoints.map(p => `
+        <div class="location-option ${p.id === activePointId ? 'active' : ''}" data-id="${p.id}">
+          <span class="location-option-name">${escapeHtml(p.name)}</span>
+          <span class="location-option-delete" data-delete-id="${p.id}" title="削除">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </span>
+        </div>
+      `).join('');
+    }
+    
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    
+    function setActivePoint(id) {
+      activePointId = id;
+      // Mark default in stored data
+      savedPoints.forEach(p => p.isDefault = (p.id === id));
+      persistSavedPoints();
+      refreshTopBarName();
+      refreshDropdownMenu();
+      const p = getActivePoint();
+      if (p) {
+        // Use saved zoom if present, otherwise fall back to a reasonable default
+        const targetZoom = (typeof p.zoom === 'number') ? p.zoom : 13;
+        map.flyTo([p.lat, p.lon], targetZoom, { duration: 0.6 });
+        loadAndRefresh(p.lat, p.lon);
+      }
+    }
+    
+    function deletePoint(id) {
+      const idx = savedPoints.findIndex(p => p.id === id);
+      if (idx === -1) return;
+      const wasActive = (id === activePointId);
+      savedPoints.splice(idx, 1);
+      persistSavedPoints();
+      if (wasActive) {
+        // Promote first remaining point if any
+        if (savedPoints.length > 0) {
+          setActivePoint(savedPoints[0].id);
+        } else {
+          activePointId = null;
+          refreshTopBarName();
+          refreshDropdownMenu();
+        }
+      } else {
+        refreshTopBarName();
+        refreshDropdownMenu();
+      }
+    }
+    
+    // Toggle dropdown when location name area is tapped (only if has options)
+    locationNameWrapper.addEventListener('click', (e) => {
+      if (!locationNameWrapper.classList.contains('has-options')) return;
+      const open = locationDropdown.classList.toggle('show');
+      locationNameWrapper.classList.toggle('open', open);
+      e.stopPropagation();
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!locationDropdown.contains(e.target) && !locationNameWrapper.contains(e.target)) {
+        locationDropdown.classList.remove('show');
+        locationNameWrapper.classList.remove('open');
+      }
+    });
+    
+    // Handle option clicks (delegate)
+    locationDropdown.addEventListener('click', (e) => {
+      const deleteEl = e.target.closest('[data-delete-id]');
+      if (deleteEl) {
+        e.stopPropagation();
+        const id = deleteEl.getAttribute('data-delete-id');
+        const p = savedPoints.find(pt => pt.id === id);
+        if (p && confirm(`「${p.name}」を削除しますか？`)) {
+          deletePoint(id);
+        }
+        return;
+      }
+      const optionEl = e.target.closest('[data-id]');
+      if (optionEl) {
+        const id = optionEl.getAttribute('data-id');
+        setActivePoint(id);
+        locationDropdown.classList.remove('show');
+        locationNameWrapper.classList.remove('open');
+      }
+    });
+    
+    // === FAB: recenter ===
+    document.getElementById('fabRecenter').addEventListener('click', () => {
+      const active = getActivePoint();
+      if (active) {
+        const targetZoom = (typeof active.zoom === 'number') ? active.zoom : 13;
+        map.flyTo([active.lat, active.lon], targetZoom, { duration: 0.6 });
+      } else {
+        map.flyTo(DEFAULT_LATLNG, 12, { duration: 0.6 });
+      }
+    });
+
+    // === FAB: register modal ===
+    const modal = document.getElementById('registerModal');
+    const modalCoord = document.getElementById('modalCoord');
+    document.getElementById('fabRegister').addEventListener('click', () => {
+      const c = map.getCenter();
+      modalCoord.textContent = `${c.lat.toFixed(4)}°N · ${c.lng.toFixed(4)}°E`;
+      document.getElementById('pointName').value = '';
+      modal.classList.add('show');
+      setTimeout(() => document.getElementById('pointName').focus(), 50);
+    });
+    document.getElementById('modalCancel').addEventListener('click', () => modal.classList.remove('show'));
+    document.getElementById('modalSave').addEventListener('click', () => {
+      const name = document.getElementById('pointName').value.trim();
+      if (!name) return;
+      // Capture EXACT current map state at the moment of click — these values must
+      // not be re-computed or re-derived elsewhere in this handler.
+      const c = map.getCenter();
+      const capturedZoom = map.getZoom();
+      const capturedLat = parseFloat(c.lat.toFixed(4));
+      const capturedLon = parseFloat(c.lng.toFixed(4));
+      const id = 'pt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      const newPoint = {
+        id,
+        name,
+        lat: capturedLat,
+        lon: capturedLon,
+        zoom: capturedZoom
+      };
+      savedPoints.push(newPoint);
+      // Make this point the active one without re-flying the map (which would
+      // animate away from the user's current view and back, snapping zoom).
+      activePointId = id;
+      savedPoints.forEach(p => p.isDefault = (p.id === id));
+      persistSavedPoints();
+      refreshTopBarName();
+      refreshDropdownMenu();
+      // Fetch forecast for the captured coordinates (no map move)
+      loadAndRefresh(capturedLat, capturedLon);
+      modal.classList.remove('show');
+    });
+    modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('show'); });
+
+    // Update coord meta text live as map moves
+    map.on('move', () => {
+      const c = map.getCenter();
+      document.getElementById('locationMeta').textContent =
+        `${c.lat.toFixed(2)}°N · ${c.lng.toFixed(2)}°E`;
+    });
+    
+    // === BOOTSTRAP: restore saved state ===
+    loadSavedPoints();
+    refreshTopBarName();
+    refreshDropdownMenu();
+    // Determine initial coordinates: active saved point if any, else default
+    const initialActive = getActivePoint();
+    const initialLat = initialActive ? initialActive.lat : DEFAULT_LATLNG[0];
+    const initialLon = initialActive ? initialActive.lon : DEFAULT_LATLNG[1];
+    if (initialActive) {
+      const initialZoom = (typeof initialActive.zoom === 'number') ? initialActive.zoom : 13;
+      map.setView([initialActive.lat, initialActive.lon], initialZoom);
+    }
+    // Initial forecast load happens after the chart is initialized below.
+
+    // === FORECAST DATA (Open-Meteo JMA MSM) ===
+    const DAYS = 7;
+    const POINTS_PER_DAY = 7;
+    // Alert when conditions enter the red zone (avg ≥ 4.5 m/s) or strong gust (≥ 6 m/s)
+    const ALERT_THRESHOLD_GUST = 6.0;
+    const ALERT_THRESHOLD_AVG = 4.5;
+    const FORECAST_HOURS = [7, 9, 11, 13, 15, 17, 19];  // every 2h from 7 to 19
+    // Hours that get a visible label on the chart x-axis (others render blank)
+    const VISIBLE_LABEL_HOURS = new Set([7, 11, 15, 19]);
+
+    const dow = ['日', '月', '火', '水', '木', '金', '土'];
+
+    // Live data arrays — filled by loadForecast()
+    let dayLabels = [];
+    let fullLabels = [];
+    let fullTimestamps = [];
+    let avgWindSpeeds = [];
+    let maxWindSpeeds = [];
+    let windDirs = [];
+    let icons = [];
+    let temps = [];
+    // Pressure-level winds for altitude profile, keyed by timestamp index
+    // Each item: { '1000hPa': {speed, dir}, '975hPa': {...}, ... }
+    let altWindsByIndex = [];
+
+    // Pressure level → approximate altitude AMSL (m) — JMA MSM standard levels
+    const PRESSURE_LEVELS = [
+      { hpa: 1000, alt: 110 },
+      { hpa: 975,  alt: 320 },
+      { hpa: 950,  alt: 500 },
+      { hpa: 925,  alt: 800 },
+      { hpa: 900,  alt: 1000 }
+    ];
+
+    // Altitude rows shown in the bottom sheet (high → low)
+    // Each row maps to either: the surface 10m wind, or a pressure level's interpolated wind.
+    const ALTITUDES = [
+      { label: '980m',  source: 'pressure', hpa: 900 },
+      { label: '780m',  source: 'pressure', hpa: 925 },
+      { label: '480m',  source: 'pressure', hpa: 950 },
+      { label: '300m',  source: 'pressure', hpa: 975 },
+      { label: '90m',   source: 'pressure', hpa: 1000 },
+      { label: '10m',   source: 'surface' }
+    ];
+
+    // === WMO weather codes → emoji + label ===
+    function weatherInfo(code) {
+      if (code == null) return { icon: '⛅', label: '不明' };
+      if (code === 0) return { icon: '☀️', label: '快晴' };
+      if (code === 1) return { icon: '🌤️', label: 'ほぼ晴' };
+      if (code === 2) return { icon: '⛅', label: '晴 (雲あり)' };
+      if (code === 3) return { icon: '☁️', label: '曇' };
+      if (code >= 45 && code <= 48) return { icon: '🌫️', label: '霧' };
+      if (code >= 51 && code <= 57) return { icon: '🌦️', label: '霧雨' };
+      if (code >= 61 && code <= 67) return { icon: '🌧️', label: '雨' };
+      if (code >= 71 && code <= 77) return { icon: '🌨️', label: '雪' };
+      if (code >= 80 && code <= 82) return { icon: '🌧️', label: 'にわか雨' };
+      if (code >= 85 && code <= 86) return { icon: '🌨️', label: 'にわか雪' };
+      if (code >= 95) return { icon: '⛈️', label: '雷雨' };
+      return { icon: '⛅', label: '曇' };
+    }
+
+    function altitudeProfileFor(idx) {
+      const surfaceSpeed = avgWindSpeeds[idx];
+      const surfaceDir = windDirs[idx];
+      const ap = altWindsByIndex[idx] || {};
+      return ALTITUDES.map((a) => {
+        if (a.source === 'surface') {
+          return { label: a.label, speed: surfaceSpeed, dir: surfaceDir };
+        }
+        const w = ap[a.hpa];
+        if (w) {
+          return { label: a.label, speed: w.speed, dir: w.dir };
+        }
+        // Fallback while data is loading
+        return { label: a.label, speed: surfaceSpeed, dir: surfaceDir };
+      });
+    }
+
+    function speedColor(v) {
+      if (v >= 4.5) return '#eb5757';
+      if (v >= 3.0) return '#e0a850';
+      return '#5cc88a';
+    }
+
+    function windArrow(deg) {
+      return `<span style="display:inline-block; transform: rotate(${deg + 180}deg);">↑</span>`;
+    }
+
+    // === FETCH DATA FROM OPEN-METEO ===
+    // JMA MSM model is regional (Japan only) and provides hourly forecasts including
+    // pressure-level winds (1000-100 hPa) up to ~33 hours ahead, plus seamless to 7d.
+    async function loadForecast(lat, lon) {
+      // Two API calls: MSM (high-res near-term incl. altitude) + seamless (7-day daily)
+      const hourlyVars = [
+        'temperature_2m',
+        'wind_speed_10m',
+        'wind_direction_10m',
+        'wind_gusts_10m',
+        'weather_code',
+        'wind_speed_1000hPa', 'wind_direction_1000hPa',
+        'wind_speed_975hPa',  'wind_direction_975hPa',
+        'wind_speed_950hPa',  'wind_direction_950hPa',
+        'wind_speed_925hPa',  'wind_direction_925hPa',
+        'wind_speed_900hPa',  'wind_direction_900hPa',
+      ].join(',');
+      const msmUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+        `&hourly=${hourlyVars}&models=jma_msm&wind_speed_unit=ms&timezone=Asia%2FTokyo&forecast_days=2`;
+      const seamlessUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+        `&hourly=temperature_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code` +
+        `&models=jma_seamless&wind_speed_unit=ms&timezone=Asia%2FTokyo&forecast_days=7`;
+
+      const [msmRes, seamlessRes] = await Promise.all([
+        fetch(msmUrl).then(r => r.json()),
+        fetch(seamlessUrl).then(r => r.json())
+      ]);
+
+      // Build a single 7-day x 6-time grid using:
+      //   - MSM data for hours within MSM range (next ~33 hours)
+      //   - Seamless data for the rest
+      const msmHourly = msmRes.hourly || {};
+      const seamlessHourly = seamlessRes.hourly || {};
+
+      function findIndexAtHour(hourlyTimeArr, targetIso) {
+        // Open-Meteo returns ISO timestamps like "2025-05-09T05:00"
+        return hourlyTimeArr.indexOf(targetIso);
+      }
+
+      // Reset arrays
+      dayLabels = [];
+      fullLabels = [];
+      fullTimestamps = [];
+      avgWindSpeeds = [];
+      maxWindSpeeds = [];
+      windDirs = [];
+      icons = [];
+      temps = [];
+      altWindsByIndex = [];
+
+      const today = new Date();
+      // Use Asia/Tokyo for date arithmetic (server already returns JST)
+      for (let d = 0; d < DAYS; d++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() + d);
+        dayLabels.push(`${date.getMonth() + 1}/${date.getDate()}(${dow[date.getDay()]})`);
+
+        for (let h = 0; h < POINTS_PER_DAY; h++) {
+          const hour = FORECAST_HOURS[h];
+          const dt = new Date(date);
+          dt.setHours(hour, 0, 0, 0);
+          fullTimestamps.push(dt);
+          fullLabels.push(String(hour));
+
+          // ISO key in local JST format used by API time array
+          const yyyy = dt.getFullYear();
+          const mm = String(dt.getMonth() + 1).padStart(2, '0');
+          const dd = String(dt.getDate()).padStart(2, '0');
+          const hh = String(dt.getHours()).padStart(2, '0');
+          const isoKey = `${yyyy}-${mm}-${dd}T${hh}:00`;
+
+          // Prefer MSM
+          let mIdx = findIndexAtHour(msmHourly.time || [], isoKey);
+          let avgSpeed = null, gustSpeed = null, dir = null, code = null, temp = null;
+          let altWinds = {};
+
+          if (mIdx !== -1 && msmHourly.wind_speed_10m && msmHourly.wind_speed_10m[mIdx] != null) {
+            avgSpeed = msmHourly.wind_speed_10m[mIdx];
+            gustSpeed = msmHourly.wind_gusts_10m ? msmHourly.wind_gusts_10m[mIdx] : avgSpeed * 1.4;
+            dir = msmHourly.wind_direction_10m[mIdx];
+            code = msmHourly.weather_code ? msmHourly.weather_code[mIdx] : null;
+            temp = msmHourly.temperature_2m ? msmHourly.temperature_2m[mIdx] : null;
+            // Pressure-level winds
+            for (const lv of PRESSURE_LEVELS) {
+              const sKey = `wind_speed_${lv.hpa}hPa`;
+              const dKey = `wind_direction_${lv.hpa}hPa`;
+              if (msmHourly[sKey] && msmHourly[sKey][mIdx] != null) {
+                altWinds[lv.hpa] = {
+                  speed: msmHourly[sKey][mIdx],
+                  dir: msmHourly[dKey][mIdx]
+                };
+              }
+            }
+          } else {
+            // Fallback to seamless
+            const sIdx = findIndexAtHour(seamlessHourly.time || [], isoKey);
+            if (sIdx !== -1 && seamlessHourly.wind_speed_10m && seamlessHourly.wind_speed_10m[sIdx] != null) {
+              avgSpeed = seamlessHourly.wind_speed_10m[sIdx];
+              gustSpeed = seamlessHourly.wind_gusts_10m ? seamlessHourly.wind_gusts_10m[sIdx] : avgSpeed * 1.4;
+              dir = seamlessHourly.wind_direction_10m[sIdx];
+              code = seamlessHourly.weather_code ? seamlessHourly.weather_code[sIdx] : null;
+              temp = seamlessHourly.temperature_2m ? seamlessHourly.temperature_2m[sIdx] : null;
+            }
+          }
+
+          if (avgSpeed == null) avgSpeed = 0;
+          if (gustSpeed == null) gustSpeed = avgSpeed * 1.3;
+          if (dir == null) dir = 0;
+          if (temp == null) temp = 0;
+
+          avgWindSpeeds.push(parseFloat(avgSpeed.toFixed(1)));
+          maxWindSpeeds.push(parseFloat(gustSpeed.toFixed(1)));
+          windDirs.push(Math.round(dir));
+          icons.push(weatherInfo(code).icon);
+          temps.push(Math.round(temp));
+          altWindsByIndex.push(altWinds);
+        }
+      }
+    }
+
+    // === RENDER DAYS ROW (in sheet header) + ARROWS + TIME (in scroller) ===
+    const daysRow = document.getElementById('daysRow');
+    const windArrowsOverlay = document.getElementById('windArrowsOverlay');
+    const timeOverlay = document.getElementById('timeOverlay');
+
+    function renderDaysAndOverlays() {
+      daysRow.innerHTML = '';
+      windArrowsOverlay.innerHTML = '';
+      timeOverlay.innerHTML = '';
+
+      for (let d = 0; d < DAYS; d++) {
+        const midIdx = d * POINTS_PER_DAY + 3;  // index 3 = 13:00 (middle of day)
+        const dayMaxTemp = Math.max(...temps.slice(d * POINTS_PER_DAY, (d + 1) * POINTS_PER_DAY));
+
+        const dayDiv = document.createElement('div');
+        dayDiv.className = 'day-block';
+        dayDiv.dataset.dayIdx = d;
+        dayDiv.innerHTML = `
+          <span class="day-text">${dayLabels[d]}</span>
+          <span class="summary-icon">${icons[midIdx] || '⛅'}</span>
+          <span class="day-temp"><span>${dayMaxTemp}</span>°</span>
+        `;
+        daysRow.appendChild(dayDiv);
+      }
+
+      // Arrow + time elements are absolutely positioned to match each chart
+      // data point's x-coordinate. This guarantees pixel-perfect alignment
+      // between dots, vertical day lines, arrows, and time labels.
+      for (let i = 0; i < avgWindSpeeds.length; i++) {
+        const h = i % POINTS_PER_DAY;
+        const arrowEl = document.createElement('div');
+        arrowEl.className = 'wind-arrow-col';
+        arrowEl.dataset.idx = i;
+        arrowEl.innerHTML = windArrow(windDirs[i]);
+        // Make each arrow tap-selectable to the same index as the chart point below
+        arrowEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          updateSelection(i);
+        });
+        windArrowsOverlay.appendChild(arrowEl);
+
+        const timeEl = document.createElement('div');
+        timeEl.className = 'time-col';
+        timeEl.dataset.idx = i;
+        const hour = FORECAST_HOURS[h];
+        timeEl.textContent = VISIBLE_LABEL_HOURS.has(hour)
+          ? String(hour).padStart(2, '0') + ':00'
+          : '';
+        timeOverlay.appendChild(timeEl);
+      }
+    }
+
+    // Position the absolutely-placed arrow / time elements to match Chart.js point x
+    function syncOverlayPositions() {
+      if (!chart7Days || !chart7Days.scales || !chart7Days.scales.x) return;
+      const meta = chart7Days.getDatasetMeta(1);
+      if (!meta || !meta.data || meta.data.length === 0) return;
+      const xScale = chart7Days.scales.x;
+      const arrows = windArrowsOverlay.querySelectorAll('.wind-arrow-col');
+      const times = timeOverlay.querySelectorAll('.time-col');
+      for (let i = 0; i < meta.data.length; i++) {
+        const px = meta.data[i].x;
+        if (arrows[i]) arrows[i].style.left = px + 'px';
+        if (times[i]) times[i].style.left = px + 'px';
+      }
+      // Size each day-block to match the chart's day boundary x ranges
+      const dayLeftXVal = (d) => d * X_DAY_SPAN - X_DAY_GAP / 2;
+      const blocks = daysRow.querySelectorAll('.day-block');
+      for (let d = 0; d < blocks.length; d++) {
+        const left = xScale.getPixelForValue(dayLeftXVal(d));
+        const right = xScale.getPixelForValue(dayLeftXVal(d + 1));
+        blocks[d].style.width = (right - left) + 'px';
+      }
+      // Draw / update day separator lines at exact chart boundary positions
+      const sepContainer = document.getElementById('daySeparators');
+      if (sepContainer) {
+        // Ensure we have one separator element per inner boundary (DAYS - 1)
+        while (sepContainer.children.length < DAYS - 1) {
+          const sep = document.createElement('div');
+          sep.className = 'day-separator';
+          sepContainer.appendChild(sep);
+        }
+        while (sepContainer.children.length > DAYS - 1) {
+          sepContainer.removeChild(sepContainer.lastChild);
+        }
+        for (let d = 1; d < DAYS; d++) {
+          const px = xScale.getPixelForValue(dayLeftXVal(d));
+          sepContainer.children[d - 1].style.left = px + 'px';
+        }
+      }
+      // Draw day stripes (alternating bg) at exact chart day boundary x ranges
+      const stripeContainer = document.getElementById('dayStripes');
+      if (stripeContainer) {
+        // We render stripes only on odd-indexed days (matches chart's pattern)
+        const oddDays = [];
+        for (let d = 0; d < DAYS; d++) if (d % 2 === 1) oddDays.push(d);
+        while (stripeContainer.children.length < oddDays.length) {
+          const stripe = document.createElement('div');
+          stripe.className = 'day-stripe';
+          stripeContainer.appendChild(stripe);
+        }
+        while (stripeContainer.children.length > oddDays.length) {
+          stripeContainer.removeChild(stripeContainer.lastChild);
+        }
+        for (let i = 0; i < oddDays.length; i++) {
+          const d = oddDays[i];
+          const left = xScale.getPixelForValue(dayLeftXVal(d));
+          const right = xScale.getPixelForValue(dayLeftXVal(d + 1));
+          stripeContainer.children[i].style.left = left + 'px';
+          stripeContainer.children[i].style.width = (right - left) + 'px';
+        }
+      }
+    }
+
+    // === Y-AXIS STEP HELPER ===
+    // Pick a reasonable step so labels don't crowd: 1 m/s for small ranges, 2 m/s
+    // for typical paramotor ranges (5–10), 3 m/s for unusual highs.
+    // Used by both the chart's gridline stepSize and dayBoundaryPlugin's labels.
+    function pickYStep(maxVal) {
+      if (maxVal <= 5) return 1;
+      if (maxVal <= 12) return 2;
+      return 3;
+    }
+
+    // === SELECTION + ALERT ===
+    let selectedIndex = 2;
+
+    // All dots use the speed-based color (selected stays the same color, just slightly larger)
+    const getPointColors = () => avgWindSpeeds.map((v) => speedColor(v));
+    const getPointRadii = (idx) => avgWindSpeeds.map((_, i) => i === idx ? 5 : 3);
+
+    function updateAltPanel(idx) {
+      const profile = altitudeProfileFor(idx);
+      const list = document.getElementById('altList');
+      const maxSpeed = Math.max(...profile.map(p => p.speed), 12);
+      list.innerHTML = profile.map(p => {
+        const pct = Math.min(100, (p.speed / maxSpeed) * 100);
+        const color = speedColor(p.speed);
+        return `
+          <li>
+            <span class="alt-h">${p.label}</span>
+            <span class="alt-bar-track"><span class="alt-bar-fill" style="width:${pct}%; background:${color};"></span></span>
+            <span class="alt-v" style="color:${color}">${p.speed.toFixed(1)}<span class="u">m/s</span></span>
+            <span class="alt-arr">${windArrow(p.dir)}</span>
+          </li>
+        `;
+      }).join('');
+
+      // Note: altPanelTime element was removed; timestamp is shown in the top bar
+    }
+
+    function updateSelection(idx) {
+      selectedIndex = idx;
+      const topSpeedEl = document.getElementById('topWindSpeed');
+      topSpeedEl.innerHTML = `${avgWindSpeeds[idx].toFixed(1)}<small>m/s</small>`;
+      const currentSpeed = avgWindSpeeds[idx];
+      topSpeedEl.style.color = speedColor(currentSpeed);
+      // Replace the old "最大 X m/s" text with the timestamp of the selected forecast
+      const dt = fullTimestamps[idx];
+      const dayStr = `${dt.getMonth()+1}/${dt.getDate()}(${dow[dt.getDay()]})`;
+      const timeStr = `${String(dt.getHours()).padStart(2,'0')}:00`;
+      document.getElementById('topWindTime').textContent = `${dayStr} ${timeStr}`;
+      document.getElementById('topWindDir').style.transform = `rotate(${windDirs[idx] + 180}deg)`;
+      // Point styling is handled by scriptable functions (pointBackgroundColor /
+      // pointRadius) on the dataset itself — they read selectedIndex on every draw,
+      // so we just need to trigger a redraw here.
+      chart7Days.update('none');
+      // Kick off the expanding-ring animation around the newly selected dot
+      triggerSelectionAnim();
+      updateAltPanel(idx);
+      // Update wind particle animation params
+      windFlow.setWind(currentSpeed, windDirs[idx]);
+    }
+
+    // === CHART ===
+    const dayBoundaryPlugin = {
+      id: 'dayBoundary',
+      beforeDraw: (chart) => {
+        const {ctx, height} = chart;
+        const xScale = chart.scales.x;
+        const yScale = chart.scales.y;
+        if (!xScale || !yScale) return;
+
+        // Day boundary x positions: midpoint of the inter-day gap.
+        // For day d (1-indexed boundary), midpoint = d * X_DAY_SPAN - X_DAY_GAP/2
+        // Stripe x range for day d: [d*X_DAY_SPAN - X_DAY_GAP/2, (d+1)*X_DAY_SPAN - X_DAY_GAP/2)
+        const dayLeftXVal = (d) => d * X_DAY_SPAN - X_DAY_GAP / 2;
+        const step = pickYStep(yScale.max);
+        const labelValues = [];
+        for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
+          if (v > 0 && v < yScale.max) labelValues.push(v);
+        }
+
+        ctx.save();
+        // === Day stripes + boundary lines ===
+        for (let i = 0; i < DAYS; i++) {
+          const xLeft = xScale.getPixelForValue(dayLeftXVal(i));
+          const xRight = xScale.getPixelForValue(dayLeftXVal(i + 1));
+          if (i % 2 === 1) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+            ctx.fillRect(xLeft, 0, xRight - xLeft, height);
+          }
+          if (i > 0) {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(240, 230, 210, 0.15)';
+            const x = Math.round(xLeft) - 0.5;
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+          }
+        }
+        // === Horizontal grid lines for y-axis values + label per day ===
+        ctx.font = "600 9px 'Inter', sans-serif";
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        for (const v of labelValues) {
+          const y = yScale.getPixelForValue(v);
+          // Light horizontal grid line
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(240, 230, 210, 0.08)';
+          ctx.lineWidth = 1;
+          ctx.moveTo(0, y);
+          ctx.lineTo(chart.width, y);
+          ctx.stroke();
+          // Label at the right of each day's left boundary
+          for (let i = 0; i < DAYS; i++) {
+            const labelX = Math.round(xScale.getPixelForValue(dayLeftXVal(i))) + 4;
+            const text = String(v);
+            // Halo for readability
+            ctx.fillStyle = 'rgba(13, 20, 38, 0.95)';
+            ctx.fillText(text, labelX - 1, y);
+            ctx.fillText(text, labelX + 1, y);
+            ctx.fillText(text, labelX, y - 1);
+            ctx.fillText(text, labelX, y + 1);
+            // Main label
+            ctx.fillStyle = 'rgba(240, 230, 210, 0.7)';
+            ctx.fillText(text, labelX, y);
+          }
+        }
+        ctx.restore();
+      }
+    };
+
+    // Animated state for the selection ring (resets on each selection change)
+    let selectionAnimStart = 0;
+    function triggerSelectionAnim() {
+      selectionAnimStart = performance.now();
+      // Keep redrawing while the animation runs
+      requestAnimationFrame(function tick() {
+        if (chart7Days) chart7Days.draw();
+        const elapsed = performance.now() - selectionAnimStart;
+        if (elapsed < 1400) requestAnimationFrame(tick);
+      });
+    }
+
+    const selectionLinePlugin = {
+      id: 'selectionLine',
+      afterDatasetsDraw: (chart) => {
+        const meta = chart.getDatasetMeta(1);
+        const point = meta.data[selectedIndex];
+        if (!point) return;
+        const {ctx, height} = chart;
+
+        ctx.save();
+        // === Dashed vertical line ===
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(point.x, 0);
+        ctx.lineTo(point.x, height);
+        ctx.stroke();
+        ctx.setLineDash([]);  // reset
+
+        // === Animated ring around the selected dot ===
+        // Two phases:
+        //  1) Initial expansion: ring grows from dot radius outward (0 → 350ms)
+        //  2) Continuous gentle pulse: subtle breathing while selected (forever)
+        const elapsed = performance.now() - selectionAnimStart;
+        const dotRadius = 5;  // matches selected pointRadius
+
+        // Phase 1: one-shot expansion ring (fades out as it grows)
+        if (elapsed < 700) {
+          const t = Math.min(1, elapsed / 700);
+          // Ease-out cubic
+          const eased = 1 - Math.pow(1 - t, 3);
+          const ringRadius = dotRadius + 2 + eased * 14;
+          const alpha = (1 - t) * 0.9;
+          ctx.beginPath();
+          ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+          ctx.lineWidth = 2;
+          ctx.arc(point.x, point.y, ringRadius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Phase 2: persistent solid ring around the dot
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.arc(point.x, point.y, dotRadius + 4, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+    };
+
+    const ctx = document.getElementById('chart7Days').getContext('2d');
+    // === X-POSITION HELPERS ===
+    // Each forecast point sits at a "virtual hour" position. Within a day, points
+    // are evenly spaced by their actual hour. Between days, a virtual gap is
+    // inserted so 19:00 → next-day 07:00 has visible breathing room.
+    const X_DAY_GAP = 4;  // virtual hours of inter-day gap (tweak for visual feel)
+    const X_FIRST = FORECAST_HOURS[0];
+    const X_LAST = FORECAST_HOURS[FORECAST_HOURS.length - 1];
+    const X_DAY_SPAN = (X_LAST - X_FIRST) + X_DAY_GAP;
+    function xPosFor(d, h) {
+      return d * X_DAY_SPAN + (FORECAST_HOURS[h] - X_FIRST);
+    }
+    // Chart's x-axis range
+    const X_MIN = -X_DAY_GAP / 2;
+    const X_MAX = (DAYS - 1) * X_DAY_SPAN + (X_LAST - X_FIRST) + X_DAY_GAP / 2;
+
+    // Build {x, y} pairs from current arrays
+    function pointsFor(values) {
+      return values.map((v, i) => {
+        const d = Math.floor(i / POINTS_PER_DAY);
+        const h = i % POINTS_PER_DAY;
+        return { x: xPosFor(d, h), y: v };
+      });
+    }
+
+    const chart7Days = new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [
+          {
+            data: pointsFor(maxWindSpeeds),
+            borderColor: 'rgba(240, 230, 210, 0.7)',
+            borderWidth: 1, borderDash: [4, 3], fill: false, tension: 0.4,
+            pointRadius: 0, pointHoverRadius: 0, pointHitRadius: 0,
+            parsing: false
+          },
+          {
+            data: pointsFor(avgWindSpeeds),
+            borderColor: '#f0e6d2',
+            backgroundColor: (context) => {
+              const chart = context.chart;
+              const {ctx, chartArea} = chart;
+              if (!chartArea) return 'transparent';
+              const gradient = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+              avgWindSpeeds.forEach((val, i) => {
+                const stop = i / Math.max(1, avgWindSpeeds.length - 1);
+                if (val >= 4.5) gradient.addColorStop(stop, 'rgba(235, 87, 87, 0.45)');
+                else if (val >= 3.0) gradient.addColorStop(stop, 'rgba(224, 168, 80, 0.35)');
+                else gradient.addColorStop(stop, 'rgba(92, 200, 138, 0.30)');
+              });
+              return gradient;
+            },
+            borderWidth: 2, fill: true, tension: 0.4,
+            pointBackgroundColor: (ctx) => {
+              const i = ctx.dataIndex;
+              return speedColor(avgWindSpeeds[i] || 0);
+            },
+            pointBorderColor: (ctx) => {
+              const i = ctx.dataIndex;
+              return speedColor(avgWindSpeeds[i] || 0);
+            },
+            pointRadius: (ctx) => {
+              return ctx.dataIndex === selectedIndex ? 5 : 3;
+            },
+            pointHitRadius: 25,
+            parsing: false
+          }
+        ]
+      },
+      options: {
+        layout: { padding: { left: 0, right: 0, top: 22, bottom: 12 } },
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: {
+          x: {
+            type: 'linear',
+            min: X_MIN,
+            max: X_MAX,
+            grid: { display: false },
+            ticks: { display: false }
+          },
+          y: {
+            grid: { display: false, drawBorder: false },
+            ticks: { display: false, stepSize: 2 },
+            beginAtZero: true, suggestedMax: 8
+          }
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        onClick: (e, activeEls) => { if (activeEls.length > 0) updateSelection(activeEls[0].index); }
+      },
+      plugins: [dayBoundaryPlugin, selectionLinePlugin]
+    });
+
+    // === REFRESH UI AFTER DATA LOADS / CHANGES ===
+    let hasInitialSelection = false;
+    
+    // Choose the data index closest to the current local time.
+    //   - If now is within today's 7:00–19:00, pick the nearest forecast hour
+    //   - If now is past today's 19:00 (or before 7:00), pick tomorrow's 7:00
+    function pickIndexForNow() {
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      // Today's window: 7:00 (420 min) to 19:00 (1140 min)
+      const FIRST_MIN = 7 * 60;
+      const LAST_MIN = 19 * 60;
+      
+      if (nowMinutes >= FIRST_MIN && nowMinutes <= LAST_MIN) {
+        // Within today's forecast window — pick nearest hour from FORECAST_HOURS
+        let bestH = 0;
+        let bestDiff = Infinity;
+        for (let h = 0; h < FORECAST_HOURS.length; h++) {
+          const diff = Math.abs(FORECAST_HOURS[h] * 60 - nowMinutes);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestH = h;
+          }
+        }
+        return 0 * POINTS_PER_DAY + bestH;  // day 0 = today
+      } else {
+        // Outside today's window — point to tomorrow's 7:00 (day 1, hour index 0)
+        return 1 * POINTS_PER_DAY + 0;
+      }
+    }
+    
+    function refreshAfterDataLoaded() {
+      // Convert raw arrays to {x, y} pairs based on time positions
+      chart7Days.data.datasets[0].data = pointsFor(maxWindSpeeds);
+      chart7Days.data.datasets[1].data = pointsFor(avgWindSpeeds);
+
+      // Re-render the days/arrows/time overlays
+      renderDaysAndOverlays();
+
+      // Sync gridline step with new max value
+      const yScale = chart7Days.scales.y;
+      const step = pickYStep(yScale.max);
+      chart7Days.options.scales.y.ticks.stepSize = step;
+
+      // On the first data load (after fetch), pick the time nearest to now.
+      // On subsequent loads (e.g. switching saved points), preserve the current selection
+      // unless it became out of bounds.
+      const isFirstLoad = !hasInitialSelection;
+      if (isFirstLoad) {
+        selectedIndex = pickIndexForNow();
+        hasInitialSelection = true;
+      }
+      if (selectedIndex >= avgWindSpeeds.length) selectedIndex = 0;
+      
+      chart7Days.update('none');
+      updateSelection(selectedIndex);
+
+      // Position overlay arrows/time labels to match Chart.js point x-coordinates.
+      requestAnimationFrame(() => {
+        syncOverlayPositions();
+        // On first load, scroll the graph horizontally so the selected point is visible
+        if (isFirstLoad) {
+          const meta = chart7Days.getDatasetMeta(1);
+          if (meta && meta.data && meta.data[selectedIndex]) {
+            const px = meta.data[selectedIndex].x;
+            const scroller = document.getElementById('graphScroller');
+            // Center the selected point in the viewport
+            const targetScroll = Math.max(0, px - scroller.clientWidth / 2);
+            scroller.scrollLeft = targetScroll;
+          }
+        }
+      });
+    }
+
+    // === LOAD + REFRESH (used at startup and on point change) ===
+    let isLoading = false;
+    async function loadAndRefresh(lat, lon) {
+      if (isLoading) return;
+      isLoading = true;
+      try {
+        await loadForecast(lat, lon);
+        refreshAfterDataLoaded();
+      } catch (err) {
+        console.error('Forecast load failed:', err);
+      } finally {
+        isLoading = false;
+      }
+    }
+
+    // After chart initialized, sync gridline step (labels are drawn by dayBoundaryPlugin)
+    setTimeout(() => {
+      const yScale = chart7Days.scales.y;
+      const step = pickYStep(yScale.max);
+      chart7Days.options.scales.y.ticks.stepSize = step;
+      chart7Days.update('none');
+      // Initial overlay sync (in case data already populated; harmless otherwise)
+      syncOverlayPositions();
+      // Initial fetch — uses initialLat/initialLon resolved during bootstrap
+      loadAndRefresh(initialLat, initialLon);
+    }, 50);
+
+    // Re-sync overlay positions when the window resizes (Chart.js re-layouts)
+    window.addEventListener('resize', () => {
+      // Defer to next frame so Chart.js has finished its own resize handling
+      requestAnimationFrame(syncOverlayPositions);
+    });
+
+    // === BOTTOM SHEET — tap on days area to toggle (drag is disabled) ===
+    const sheet = document.getElementById('bottomSheet');
+    const tapZone = document.getElementById('daysTapZone');
+    const graphScroller = document.getElementById('graphScroller');
+    
+    // Read actual bottom inset (safe-area or 24px gesture-bar fallback) so we
+    // can size the sheet such that content remains fully visible above the
+    // Android gesture bar / iOS home bar.
+    function bottomInset() {
+      // Read CSS env via a temporary element
+      const probe = document.createElement('div');
+      probe.style.position = 'absolute';
+      probe.style.padding = '0 0 max(env(safe-area-inset-bottom, 0px), 24px) 0';
+      probe.style.visibility = 'hidden';
+      document.body.appendChild(probe);
+      const px = parseFloat(getComputedStyle(probe).paddingBottom) || 24;
+      document.body.removeChild(probe);
+      return px;
+    }
+    const SHEET_BOTTOM_PAD = bottomInset();
+    
+    // Internal content heights (days row + chart, plus alt panel area when expanded)
+    const CONTENT_COLLAPSED = 132;  // days-row 36 + chart 96
+    const CONTENT_EXPANDED = Math.min(window.innerHeight * 0.65, 440);
+    
+    // Total sheet heights include the bottom padding (border-box)
+    const COLLAPSED = CONTENT_COLLAPSED + SHEET_BOTTOM_PAD;
+    const EXPANDED = CONTENT_EXPANDED + SHEET_BOTTOM_PAD;
+
+    document.documentElement.style.setProperty('--sheet-collapsed-h', COLLAPSED + 'px');
+    document.documentElement.style.setProperty('--sheet-expanded-h', EXPANDED + 'px');
+
+    let isExpanded = false;
+
+    function setExpanded(expanded) {
+      isExpanded = expanded;
+      sheet.classList.toggle('expanded', expanded);
+      document.documentElement.style.setProperty('--sheet-h', (expanded ? EXPANDED : COLLAPSED) + 'px');
+    }
+
+    // === Gesture handling — tap toggles, horizontal drag scrolls graph ===
+    // Vertical drag intentionally disabled (per user request).
+    
+    const TAP_MAX_MOVE_PX = 8;
+    const TAP_MAX_DURATION_MS = 500;
+    
+    let pointerActive = false;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
+    let pointerStartTime = 0;
+    let intent = null;  // null | 'horizontal'
+    let startScrollLeft = 0;
+    let totalMoveX = 0;
+    let totalMoveY = 0;
+
+    function onPointerDown(e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      pointerActive = true;
+      pointerStartX = e.clientX;
+      pointerStartY = e.clientY;
+      pointerStartTime = Date.now();
+      intent = null;
+      totalMoveX = 0;
+      totalMoveY = 0;
+      startScrollLeft = graphScroller.scrollLeft;
+      try { tapZone.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+
+    function onPointerMove(e) {
+      if (!pointerActive) return;
+      const dx = e.clientX - pointerStartX;
+      const dy = e.clientY - pointerStartY;
+      totalMoveX = dx;
+      totalMoveY = dy;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+
+      // Decide intent once movement is meaningful
+      if (intent === null) {
+        if (adx > TAP_MAX_MOVE_PX || ady > TAP_MAX_MOVE_PX) {
+          // Only act on horizontal motion; vertical motion is ignored (no drag-to-open)
+          if (adx > ady) {
+            intent = 'horizontal';
+          } else {
+            // Vertical motion → cancel the gesture entirely (don't trigger tap, don't drag)
+            intent = 'cancelled';
+          }
+        } else {
+          return;
+        }
+      }
+
+      if (intent === 'horizontal') {
+        graphScroller.scrollLeft = startScrollLeft - dx;
+        if (e.cancelable) e.preventDefault();
+      }
+      // intent === 'cancelled' or vertical → do nothing, let browser handle
+    }
+
+    function onPointerEnd(e) {
+      if (!pointerActive) return;
+      pointerActive = false;
+      try { tapZone.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      
+      const elapsed = Date.now() - pointerStartTime;
+      const adx = Math.abs(totalMoveX);
+      const ady = Math.abs(totalMoveY);
+      
+      if (intent === null && adx <= TAP_MAX_MOVE_PX && ady <= TAP_MAX_MOVE_PX && elapsed <= TAP_MAX_DURATION_MS) {
+        // It's a tap — toggle expand state
+        setExpanded(!isExpanded);
+      }
+      // Otherwise (horizontal swipe or cancelled vertical motion) — do nothing
+      
+      intent = null;
+    }
+
+    if (window.PointerEvent) {
+      tapZone.addEventListener('pointerdown', onPointerDown);
+      tapZone.addEventListener('pointermove', onPointerMove);
+      tapZone.addEventListener('pointerup', onPointerEnd);
+      tapZone.addEventListener('pointercancel', onPointerEnd);
+    } else {
+      tapZone.addEventListener('touchstart', (e) => {
+        const t = e.touches[0];
+        onPointerDown({ clientX: t.clientX, clientY: t.clientY, pointerId: 1, pointerType: 'touch', button: 0 });
+      }, { passive: false });
+      tapZone.addEventListener('touchmove', (e) => {
+        const t = e.touches[0];
+        onPointerMove({ clientX: t.clientX, clientY: t.clientY, cancelable: e.cancelable, preventDefault: () => e.preventDefault() });
+      }, { passive: false });
+      tapZone.addEventListener('touchend', () => onPointerEnd({ pointerId: 1 }));
+      tapZone.addEventListener('touchcancel', () => onPointerEnd({ pointerId: 1 }));
+    }
+
+    // Initial sheet height var for FAB positioning
+    document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
+
+    // Prevent body bounce-scroll on iOS
+    document.body.addEventListener('touchmove', (e) => {
+      if (e.target === document.body) e.preventDefault();
+    }, { passive: false });
+  </script>
+  <script>
+    // Register PWA service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js').catch((err) => {
+          console.warn('Service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
