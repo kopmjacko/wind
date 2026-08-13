@@ -52,7 +52,14 @@
   }
 
   #map {
-    position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;
+    position: absolute; top: 0; left: 0; width: 100%;
+    /* シート高 (--sheet-h) と同一ソースで駆動。setSheetHeight() が inline height と
+       --sheet-h を同時更新するため、シート上端と map 下端が常に一致し、
+       間に body 背景 (ネイビー) が露出しない。ALTパネル高も実測値で整合。 */
+    height: calc(100% - var(--sheet-h, 403px) - var(--tab-bar-h));
+    /* bottom-sheet の height transition と同期して滑らかに */
+    transition: height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 1;
     background: #e8eef0;
   }
 
@@ -82,7 +89,7 @@
     border: none;
     border-bottom: 1px solid var(--line);
     /* Account for iOS notch via safe-area, but visually flush to edges */
-    padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px;
+    padding: calc(env(safe-area-inset-top, 0px) + 6px) 16px 6px;
     display: flex; justify-content: space-between; align-items: center;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
   }
@@ -119,8 +126,6 @@
   }
   .location-name-wrapper.has-options .dropdown-caret { display: inline-block; }
   .location-name-wrapper.open .dropdown-caret { transform: rotate(180deg); }
-  
-  .location-meta { font-size: 0.6rem; color: var(--ink-faint); font-family: monospace; }
   
   /* Dropdown menu — shown when location is tapped (with multiple saved points) */
   .location-dropdown {
@@ -194,7 +199,7 @@
     line-height: 1;
   }
   .wind-dir {
-    font-size: 1.4rem;
+    font-size: 2.1rem;
     display: inline-block;
     transition: transform 0.3s ease;
     align-self: center;
@@ -215,19 +220,15 @@
     color: var(--ink-faint);
     margin-left: 2px;
   }
-  .current-weather-sub {
-    font-family: 'JetBrains Mono', 'Inter', monospace;
-    font-size: 0.7rem;
-    color: var(--gold);
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin-top: 6px;
-  }
   /* === CENTER PULSE MARKER === */
   .center-marker {
     position: absolute;
-    top: 50%; left: 50%;
+    /* 地図領域の中央 = (100% - シート高) / 2。--sheet-h 駆動で #map と完全同期。 */
+    top: calc((100% - var(--sheet-h, 403px) - var(--tab-bar-h)) / 2);
+    left: 50%;
     transform: translate(-50%, -50%);
+    /* シート開閉に合わせて滑らかに移動 (bottom-sheet / #map と同じカーブ) */
+    transition: top 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     z-index: 5;
     pointer-events: none;
     width: 80px; height: 80px;
@@ -264,7 +265,7 @@
     position: absolute;
     z-index: 8;
     right: 12px;
-    bottom: calc(var(--sheet-h, 130px) + 12px);
+    bottom: calc(var(--sheet-h, 130px) + var(--tab-bar-h) + 12px);
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -289,39 +290,49 @@
   .fab.primary { color: var(--gold); }
   .fab svg { width: 20px; height: 20px; }
 
-  /* === BOTTOM SHEET — edge to edge, no rounded corners, no handle === */
-  :root { --sheet-collapsed-h: 130px; --sheet-expanded-h: 380px; }
+  /* === BOTTOM SHEET (現: 予報エリア) === */
+  :root {
+    --day-card-h: 129px;  /* 36 header + 72 chart + 21 time-labels = 129 */
+    --day-card-margin: 4px;  /* day-card 間のパディング (time-labels と次の head の間) */
+    --stack-top-pad: 4px;  /* リスト最上部の day-card の上のパディング */
+    --tab-bar-h: 0px;  /* タブバー廃止済 (元の値保持は無し) */
+    --forecast-area-h: calc((var(--day-card-h) + var(--day-card-margin)) * 3 + var(--stack-top-pad));  /* デフォルト: 3日分 + トップpad */
+    --field-area-h: calc(var(--day-card-h) + var(--day-card-margin) + var(--stack-top-pad));           /* 単日モード: 1日分 + トップpad */
+  }
 
   .bottom-sheet {
-    bottom: 0; left: 0; width: 100%;
+    bottom: var(--tab-bar-h); left: 0; width: 100%;
     border-radius: 0;       /* edge to edge */
-    /* No bottom padding when collapsed — sheet height matches the day-card. */
     padding: 0;
     box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.6);
     border: none;
     border-top: 1px solid var(--line);
-    height: var(--sheet-collapsed-h);
+    /* --sheet-h で height を統一 (JS が単日/マルチで切替)。両方向に transition が効く */
+    height: var(--sheet-h, 403px);
     transition: height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    /* 新レイアウト: 地図と重ならないので背景を不透明に */
+    background: var(--paper);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
-  .bottom-sheet.expanded {
-    height: var(--sheet-expanded-h);
-    padding: 0 0 max(env(safe-area-inset-bottom, 0px), 32px);
+  /* 現地タブで ALT パネル展開時 (has-alt-openクラスは既存ロジックで付く) */
+  body[data-single-day] .bottom-sheet.has-alt-open {
+    height: var(--sheet-h-collapsed-alt, calc(var(--field-area-h) + 260px));
   }
-  /* When the sheet is collapsed but an inline altitude panel is open in the
-     pinned day-card, expand the sheet height to fit the panel so the user can
-     see the altitude info without opening the full sheet. JS sets
-     --sheet-h-collapsed-alt to the needed height. */
-  .bottom-sheet.has-alt-open:not(.expanded) {
-    height: var(--sheet-h-collapsed-alt, var(--sheet-collapsed-h));
-    padding: 0 0 max(env(safe-area-inset-bottom, 0px), 16px);
+  .day-text { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+  .day-text.weekday { color: var(--ink); }
+  .day-text.weekend { color: var(--gold); }
+  /* 1日の代表天気アイコン (日付の右側) */
+  .day-summary-icon {
+    font-size: 22px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
   }
-
-  .day-text { font-size: 0.95rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
-  .summary-icon { font-size: 1rem; }
-  .day-temp { font-size: 0.95rem; font-weight: 600; color: var(--ink-faint); letter-spacing: -0.02em; }
+  .day-temp { font-size: 20px; font-weight: 600; color: var(--ink-faint); letter-spacing: -0.02em; }
   .day-temp span { color: var(--ink); }
 
   /* === LOADING SKELETON — shown while forecast data is being fetched ===
@@ -385,7 +396,7 @@
   }
   .skeleton-card {
     width: 100%;
-    height: 128px;
+    height: 168px;
     flex-shrink: 0;
     position: relative;
     border-bottom: 1px solid var(--line-soft);
@@ -423,19 +434,23 @@
   /* === WEEKLY STACK — vertically scrollable list of day-cards + altitude panel === */
   .weekly-stack {
     flex: 1;
-    min-height: 128px;  /* always fit at least one full day-card row */
+    min-height: var(--day-card-h, 129px);  /* always fit at least one full day-card row */
+    padding-top: var(--stack-top-pad, 4px);
+    /* 最終日カードを単日モードで上端まで scrollTop できるようにする余白 */
+    padding-bottom: var(--stack-top-pad, 4px);
     overflow-y: hidden;
     overflow-x: hidden;
     scrollbar-width: none;
-  }
-  .bottom-sheet.expanded .weekly-stack {
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
   }
   /* Allow vertical overflow when the collapsed sheet is expanded by an alt
      panel — needed so the inline panel content is visible. */
   .bottom-sheet.has-alt-open .weekly-stack {
     overflow-y: visible;
+  }
+  /* ALT パネル展開中は、展開中の日カード (alt-open) 以外を非表示にして
+     スクロールによる別日の表示を防ぐ */
+  .bottom-sheet.has-alt-open .day-card:not(.alt-open) {
+    display: none;
   }
   .weekly-stack::-webkit-scrollbar { display: none; }
   
@@ -448,7 +463,7 @@
     .weekly-stack {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-auto-rows: 128px;
+      grid-auto-rows: calc(var(--day-card-h, 129px) + var(--day-card-margin, 12px));
       align-content: start;
     }
   }
@@ -458,13 +473,13 @@
     }
   }
   
-  /* One day-card per day: header (date + temp) + chart fitting full container width */
+  /* One day-card per day: header (date + temp) + chart + time labels */
   .day-card {
     width: 100%;
-    height: 128px;  /* 36px header + 92px chart (4px buffer for time labels) */
+    height: var(--day-card-h, 129px);  /* 36 header + 72 chart + 21 time-labels */
     flex-shrink: 0;
     position: relative;
-    border-bottom: 1px solid var(--line-soft);
+    margin-bottom: var(--day-card-margin, 12px);
   }
   /* Vertical column borders between grid cells.
      Easier than nth-child arithmetic: render a right border on every cell,
@@ -490,35 +505,8 @@
       border-right: none;
     }
   }
-  .day-card:last-of-type { border-bottom: none; }
+  .day-card:last-of-type { border-bottom: none; margin-bottom: 0; }
   
-  /* Crossfade behavior: when the selected day changes (head tap → close), the
-     day-cards smoothly fade opacity so the user sees content swap rather than
-     snap. Default is fully visible; the .is-fading class temporarily reduces
-     opacity during the swap. */
-  .day-card {
-    transition: opacity 0.25s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .day-card.is-fading {
-    opacity: 0;
-  }
-  /* Staggered reveal when the sheet expands: each card starts pushed slightly
-     down + transparent, and rises up + fades in with a small per-card delay.
-     The transition-delay is set inline by JS based on dayIdx so the animation
-     looks like a chain pull from above. */
-  .bottom-sheet.is-revealing .day-card {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  /* When the sheet is fully expanded, cards transition back to their natural
-     state with a stagger — driven by inline --reveal-delay variables. */
-  .bottom-sheet.expanded .day-card {
-    opacity: 1;
-    transform: translateY(0);
-    transition:
-      opacity 0.35s ease var(--reveal-delay, 0ms),
-      transform 0.45s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms);
-  }
   /* day-card-head: center area (date + temp) is clickable for sheet toggle;
      alt-toggle button on the right opens/closes a per-day altitude panel. */
   .day-card-head {
@@ -533,19 +521,21 @@
     flex: 1;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 14px;
+    padding-left: 12px;
     height: 100%;
-    cursor: pointer;
   }
-  .day-card-head-center:active { background: rgba(255, 255, 255, 0.04); }
   .alt-toggle {
     position: absolute;
     right: 12px;
+    /* day-card-head の垂直中央 */
     top: 50%;
     transform: translateY(-50%);
-    padding: 4px 10px;
-    border: 1px solid var(--line);
+    /* 日付文字高(20px)に合わせた外形 */
+    padding: 3px 12px;
+    /* コントラスト高めの枠 (透明度 0.15 → 0.4) */
+    border: 1px solid rgba(240, 230, 210, 0.4);
     border-radius: 999px;
     background: rgba(13, 20, 38, 0.6);
     color: var(--ink-faint);
@@ -558,9 +548,16 @@
     z-index: 2;
     line-height: 1;
   }
+  /* Expanded invisible tap target — extends 14px on each side so the button is
+     easier to hit on touch devices without changing its visual size. */
+  .alt-toggle::before {
+    content: '';
+    position: absolute;
+    inset: -14px -14px -14px -14px;
+  }
   .alt-toggle-label {
     font-family: 'Inter', sans-serif;
-    font-size: 9px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.12em;
   }
@@ -573,13 +570,6 @@
     border-color: var(--gold);
     background: var(--gold);
   }
-  /* The altitude panel is meant to be opened only from the collapsed (pinned)
-     bottom sheet view. When the sheet is expanded, hide the button to keep
-     the multi-day overview clean. */
-  .bottom-sheet.expanded .alt-toggle {
-    display: none;
-  }
-
   /* When alt panel is open, the day-card grows from fixed 128px to auto so
      the inline altitude panel fits below the chart. */
   .day-card.alt-open { height: auto; }
@@ -601,90 +591,137 @@
   .day-card-chart {
     position: relative;
     width: 100%;
-    height: 92px;
+    height: 132px;
   }
 
   /* Chart sub-region inside each day-card.
      Layout (top to bottom):
-       0–18px : wind speed + arrow combo
-       18–78px: chart canvas
-       78–92px: time labels */
+       0–58px   : wind speed + arrow (row 1)  +  weather icon (row 2)
+       48–118px : chart canvas (graph area ~58px tall, 1.2× of previous)
+       118–132px: time labels */
   .chart-region {
     position: relative;
     width: 100%;
-    height: 92px;
+    height: 72px;
     flex-shrink: 0;
   }
 
-  /* Wind info (speed + direction arrow) at the top of the chart region */
+  /* 時刻ラベル - 各day-card直下 (Chart.jsのデータ点x座標に同期して絶対配置) */
+  .day-card-time-labels {
+    position: relative;
+    /* 時刻テキストと下部罫線の間のパディング (⑥) */
+    padding: 0 0 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-faint);
+    line-height: 1;
+    height: 21px;
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+  .day-card-time-labels .time-label {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  /* 選択線の時刻ラベル領域への延長 (Y軸下端から時刻ラベル下端まで) */
+  .day-card-time-labels .time-labels-sel-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1.5px;
+    /* 破線を CSS で表現 (Chart.jsのsetLineDash([4,4])と同じピッチ) */
+    background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.75) 0,
+      rgba(255, 255, 255, 0.75) 4px,
+      transparent 4px,
+      transparent 8px);
+    background-size: 100% 8px;
+    background-repeat: repeat-y;
+    transform: translateX(-50%);
+    pointer-events: none;
+    display: none;  /* JS で表示制御 */
+  }
+  .day-card-time-labels .time-labels-sel-line.visible {
+    display: block;
+  }
+  /* 非選択日は半分の透過度 */
+  .day-card-time-labels .time-labels-sel-line.dim {
+    background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.35) 0,
+      rgba(255, 255, 255, 0.35) 4px,
+      transparent 4px,
+      transparent 8px);
+  }
+
+  /* Wind info (weather icon + arrow + wind speed) at top of chart region.
+     Two-row stack:
+       Row 1: weather icon + direction arrow inline
+       Row 2: wind speed */
   .wind-info-overlay {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
-    height: 18px;
+    height: 72px;
     pointer-events: none;
     z-index: 5;
   }
   .wind-info-col {
     position: absolute;
     top: 0;
-    transform: translateX(-50%);
+    /* transform で x/y 両方をセンタリング (JSが top/left を設定) */
+    transform: translate(-50%, -50%);
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
+    gap: 2px;
     line-height: 1;
     white-space: nowrap;
     filter: drop-shadow(0 0 3px rgba(13, 20, 38, 0.9));
     pointer-events: auto;
     cursor: pointer;
-    padding: 2px 6px;
+    padding: 0 4px;
     -webkit-tap-highlight-color: transparent;
   }
   .wind-info-col:active {
-    transform: translateX(-50%) scale(1.12);
+    transform: translate(-50%, -50%) scale(1.12);
     transition: transform 0.1s ease;
+  }
+  .wind-info-col .w-row1 {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1;
+    font-size: 20px;
+  }
+  .wind-info-col .w-icon {
+    font-size: 20px;
+    line-height: 1;
+  }
+  .wind-info-col .w-arrow {
+    font-size: 20px;
+    color: var(--ink);
+    line-height: 1;
   }
   .wind-info-col .w-speed {
     font-family: 'DM Serif Display', serif;
     font-style: italic;
     font-weight: 800;
-    font-size: 0.85rem;
+    font-size: 23px;
     letter-spacing: -0.02em;
-  }
-  .wind-info-col .w-arrow {
-    font-size: 0.85rem;
-    color: var(--ink);
-  }
-  .wind-info-col .w-icon {
-    font-size: 0.9rem;
-    line-height: 1;
-    margin-left: 2px;
+    line-height: 1.1;
+    /* 風速テキストを点から上にオフセット (transform はレイアウトに影響せず
+       指定 px がそのまま視覚移動になる) */
+    transform: translateY(-4px);
   }
 
-  /* Time labels at the bottom of the chart's x-axis */
+  /* 旧レイアウト: グラフ内の時刻ラベル(time-overlay)は非表示。
+     新レイアウトでは day-card-time-labels (グラフ直下) を使うため。 */
   .time-overlay {
-    position: absolute;
-    bottom: 8px;
-    left: 0;
-    width: 100%;
-    height: 14px;
-    pointer-events: none;
-    z-index: 5;
-  }
-  /* Time labels at the bottom of the chart's x-axis — centered on the dot x */
-  .time-col {
-    position: absolute;
-    bottom: 0;
-    transform: translateX(-50%);
-    font-size: 0.7rem;
-    color: var(--ink-faint);
-    font-weight: 600;
-    font-family: 'JetBrains Mono', 'Inter', sans-serif;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-    line-height: 1;
+    display: none;
   }
 
   .chart-wrapper {
@@ -720,7 +757,7 @@
   .alt-list li:last-child { border-bottom: none; }
   .alt-h {
     font-family: 'Inter', 'Noto Sans JP', sans-serif;
-    font-size: 0.85rem;
+    font-size: 1rem;
     font-weight: 400;
     letter-spacing: -0.01em;
     line-height: 1;
@@ -743,7 +780,7 @@
     font-family: 'DM Serif Display', serif;
     font-style: italic;
     font-weight: 800;
-    font-size: 1.4rem;
+    font-size: 1.65rem;
     letter-spacing: -0.02em;
     line-height: 1;
     text-align: right;
@@ -758,8 +795,9 @@
     font-weight: 600;
   }
   .alt-arr {
-    font-size: 1.1rem;
-    width: 20px;
+    /* グラフ上の風向アイコン (.w-arrow) と同じサイズ */
+    font-size: 20px;
+    width: 24px;
     text-align: center;
     color: var(--ink);
   }
@@ -775,9 +813,6 @@
     letter-spacing: 0.04em;
     line-height: 1.4;
     display: none;  /* hidden when collapsed */
-  }
-  .bottom-sheet.expanded .data-source {
-    display: block;
   }
   .data-source a {
     color: var(--ink-faint);
@@ -864,6 +899,34 @@
     background: transparent;
     color: var(--ink);
   }
+
+  /* === 単日/マルチデイ モードごとのシート挙動 === */
+  /* マルチデイ表示中は 4日目以降を縦スクロール */
+  body:not([data-single-day]) .weekly-stack {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* マルチデイ表示中は ALT ボタン非表示 (単日展開時のみ表示) */
+  body:not([data-single-day]) .alt-toggle {
+    display: none;
+  }
+  /* 日付ヘッダをタップ可能に (単日/マルチ切替) */
+  .day-card-head {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s ease;
+  }
+  .day-card-head:active {
+    background: rgba(224, 168, 80, 0.18);
+  }
+  /* (単日展開時、上のカードは消さずに残す。シート上端の降下が覆い隠す) */
+  /* 閉じ開始のジャンプ段階: sheet/map/marker の transition を一時無効化して
+     シート上端をタップカード直上まで瞬時移動 (上のカード+ベースを即座に地図が覆う) */
+  body.snap-jump .bottom-sheet,
+  body.snap-jump #map,
+  body.snap-jump .center-marker {
+    transition: none !important;
+  }
 </style>
 </head>
 <body>
@@ -887,7 +950,6 @@
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </div>
-      <div class="location-meta" id="locationMeta">36.04°N · 139.89°E</div>
       <!-- Dropdown menu (hidden by default, shown when locationNameWrapper is tapped) -->
       <div class="location-dropdown" id="locationDropdown"></div>
     </div>
@@ -896,7 +958,6 @@
         <span class="wind-speed" id="topWindSpeed">4.5<small>m/s</small></span>
         <span class="wind-dir" id="topWindDir">↑</span>
       </div>
-      <div class="current-weather-sub" id="topWindTime">— —/—(—) —:—</div>
     </div>
   </div>
 
@@ -957,6 +1018,9 @@
     </div>
   </div>
 
+  <!-- 新レイアウト: 画面最下部のタブバー (予報 / 現地) -->
+
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
@@ -983,17 +1047,6 @@
       let dir = 0;                 // meteorological "from" direction in degrees
       let rafId = null;
       let initialized = false;
-
-      function getViewport() {
-        // Prefer visualViewport (handles mobile address bar correctly), fall back to window.
-        if (window.visualViewport) {
-          return {
-            w: window.visualViewport.width,
-            h: window.visualViewport.height
-          };
-        }
-        return { w: window.innerWidth, h: window.innerHeight };
-      }
 
       function resize() {
         // Use the canvas's own client dimensions — most reliable across mobile browsers
@@ -1388,8 +1441,30 @@
     // Update coord meta text live as map moves
     map.on('move', () => {
       const c = map.getCenter();
-      document.getElementById('locationMeta').textContent =
+      const metaEl = document.getElementById('locationMeta');
+      if (metaEl) metaEl.textContent =
         `${c.lat.toFixed(2)}°N · ${c.lng.toFixed(2)}°E`;
+    });
+
+    // === ドラッグ終了後、自動で中央地点の予報を取得 ===
+    // - デバウンス 600ms: 連続操作中は発火しない
+    // - 距離しきい値: 前回ロード座標とほぼ同じ (約 300m 未満) ならスキップ。
+    //   シート開閉時の setView (毎フレーム) による moveend もこれで無視される。
+    let moveEndTimer = null;
+    map.on('moveend', () => {
+      clearTimeout(moveEndTimer);
+      moveEndTimer = setTimeout(() => {
+        const c = map.getCenter();
+        // loadAndRefresh 側の lastLoadedLat/Lon と比較 (未ロードなら必ず取得)
+        try {
+          if (lastLoadedLat != null && lastLoadedLon != null) {
+            const dLat = Math.abs(c.lat - lastLoadedLat);
+            const dLon = Math.abs(c.lng - lastLoadedLon);
+            if (dLat < 0.003 && dLon < 0.003) return;  // ≈300m 未満の変化は無視
+          }
+          loadAndRefresh(c.lat, c.lng);
+        } catch (e) { /* 初期化前なら次の moveend で処理 */ }
+      }, 600);
     });
     
     // === BOOTSTRAP: restore saved state ===
@@ -1408,13 +1483,15 @@
 
     // === FORECAST DATA (Open-Meteo JMA MSM) ===
     const DAYS = 7;
-    const POINTS_PER_DAY = 7;
+    // 新レイアウト: 5時刻 (7:00 / 10:00 / 13:00 / 16:00 / 19:00) - 朝夕の凪重視
+    const POINTS_PER_DAY = 5;
     // Alert when conditions enter the red zone (avg ≥ 4.5 m/s) or strong gust (≥ 6 m/s)
     const ALERT_THRESHOLD_GUST = 6.0;
     const ALERT_THRESHOLD_AVG = 4.5;
-    const FORECAST_HOURS = [7, 9, 11, 13, 15, 17, 19];  // every 2h from 7 to 19
+    const FORECAST_HOURS = [7, 10, 13, 16, 19];  // every 3h from 7 to 19 (paramotor-friendly)
     // Hours that get a visible label on the chart x-axis (others render blank)
-    const VISIBLE_LABEL_HOURS = new Set([7, 11, 15, 19]);
+    // 新レイアウト: 5時刻すべてラベル表示 (旧: 間引いて 7,11,15,19 のみ)
+    const VISIBLE_LABEL_HOURS = new Set([7, 10, 13, 16, 19]);
 
     const dow = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -1557,7 +1634,8 @@
       for (let d = 0; d < DAYS; d++) {
         const date = new Date(today);
         date.setDate(today.getDate() + d);
-        dayLabels.push(`${date.getMonth() + 1}/${date.getDate()}(${dow[date.getDay()]})`);
+        // 新レイアウト: "8/17 月" 形式(日付 → 曜日、括弧なし)
+        dayLabels.push(`${date.getMonth() + 1}/${date.getDate()} ${dow[date.getDay()]}`);
 
         for (let h = 0; h < POINTS_PER_DAY; h++) {
           const hour = FORECAST_HOURS[h];
@@ -1630,8 +1708,9 @@
     const dayCharts = [];
     const dayInfoOverlays = [];
     const dayTimeOverlays = [];
+    const dayTimeLabels = [];  // 新レイアウト: 時刻ラベル要素の参照 (x 座標同期用)
 
-    const GHOST_HOURS_BEFORE = 1.5;
+    const GHOST_HOURS_BEFORE = 1.5;  // x軸範囲外に配置され、両端フェード表現のみに使用
     const GHOST_HOURS_AFTER  = 1.5;
 
     function dayPoints(values, dayIdx) {
@@ -1661,6 +1740,23 @@
       grad.addColorStop(1, `rgba(${baseRGB}, ${alpha1})`);
       return grad;
     }
+    // 塗り用: 垂直グラデーション (上=濃, 下=淡)。色相はベース色のまま維持し、
+    // アルファ差でグラデーションを表現。視認性のため差を大きめに。
+    function buildFillGradient(ctx, baseRGB, alpha0, alpha1) {
+      const p0 = ctx.p0, p1 = ctx.p1;
+      const chartArea = ctx.chart.chartArea;
+      if (!p0 || !p1 || !chartArea) return `rgba(${baseRGB}, ${(alpha0 + alpha1) / 2})`;
+      const canvasCtx = ctx.chart.ctx;
+      const grad = canvasCtx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+      const midAlpha = (alpha0 + alpha1) / 2;
+      // 上端: midAlpha × 1.8 (max 1.0 でクランプ、しっかり色が出る)
+      // 下端: midAlpha × 0.5 (元の半分)
+      const topAlpha = Math.min(1, midAlpha * 1.8);
+      const bottomAlpha = midAlpha * 0.5;
+      grad.addColorStop(0, `rgba(${baseRGB}, ${topAlpha.toFixed(3)})`);
+      grad.addColorStop(1, `rgba(${baseRGB}, ${bottomAlpha.toFixed(3)})`);
+      return grad;
+    }
     function segmentEndpointAlphas(p0Idx, p1Idx, baseAlpha) {
       const a0 = isGhost(p0Idx) ? 0 : baseAlpha;
       const a1 = isGhost(p1Idx) ? 0 : baseAlpha;
@@ -1684,20 +1780,28 @@
       return {
         id: `overlaySync_${dayIdx}`,
         afterDraw: (chart) => {
-          const meta = chart.getDatasetMeta(1);
+          const meta = chart.getDatasetMeta(0);
           if (!meta || !meta.data || meta.data.length === 0) return;
           const infoOverlay = dayInfoOverlays[dayIdx];
-          const timeOverlay = dayTimeOverlays[dayIdx];
-          if (!infoOverlay || !timeOverlay) return;
+          if (!infoOverlay) return;
           const infos = infoOverlay.querySelectorAll('.wind-info-col');
-          const times = timeOverlay.querySelectorAll('.time-col');
+          const timeLabelsEl = dayTimeLabels[dayIdx];
+          const timeSpans = timeLabelsEl ? timeLabelsEl.querySelectorAll('.time-label') : [];
+          // 新レイアウト: オーバーレイを各データ点に重ねる
+          // 上=風速、下=天気+風向 が点を挟む形になる
           for (let h = 0; h < POINTS_PER_DAY; h++) {
             const point = meta.data[h + 1];
             if (!point) continue;
             const px = point.x;
-            if (px <= 0) continue;  // not yet laid out
-            if (infos[h]) infos[h].style.left = px + 'px';
-            if (times[h]) times[h].style.left = px + 'px';
+            const py = point.y;
+            if (px <= 0) continue;
+            if (infos[h]) {
+              infos[h].style.left = px + 'px';
+              infos[h].style.top = py + 'px';
+            }
+            if (timeSpans[h]) {
+              timeSpans[h].style.left = px + 'px';
+            }
           }
         }
       };
@@ -1715,53 +1819,78 @@
       ctx.fillText(text, x, y);
     }
 
+    // Y軸主軸線の上端 y 座標を求める (最上位に描画されるY軸ラベルの文字上端に揃える)。
+    // makeDayBoundaryPlugin と 破線プラグイン(選択線・現在時刻線)の両方で使用。
+    function computeYAxisTop(chart) {
+      const yScale = chart.scales && chart.scales.y;
+      const chartArea = chart.chartArea;
+      if (!yScale || !chartArea) return 0;
+      const step = pickYStep(yScale.max);
+      let topLabelVal = 0;
+      for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
+        if (v <= 0 || v > yScale.max) continue;
+        topLabelVal = v;
+        break;
+      }
+      const FONT_H = 13;  // Y軸ラベルフォントの高さ (makeDayBoundaryPlugin と一致)
+      return topLabelVal > 0
+        ? yScale.getPixelForValue(topLabelVal) - FONT_H / 2
+        : chartArea.top;
+    }
+
     // Per-day plugin: draws horizontal grid + Y-axis labels + primary axes + m/s unit
     function makeDayBoundaryPlugin(dayIdx) {
-      const Y_LABEL_X = 14;
-      const Y_AXIS_X = 28.5;  // half-pixel offset for crisp 1px line
-      const UNIT_X = 12;
+      const AXIS_PAD = 2;  // 主軸と折れ線/塗りの間のマージン (px)
+      const Y_LABEL_X_OFFSET = 8;   // Y軸線から左へのオフセット(Y軸ラベルの右端位置)
       const AXIS_COLOR = 'rgba(240, 230, 210, 0.25)';
       const GRID_COLOR = 'rgba(240, 230, 210, 0.08)';
-      const LABEL_COLOR = 'rgba(240, 230, 210, 0.7)';
-      const UNIT_COLOR = 'rgba(240, 230, 210, 0.55)';
+      const LABEL_COLOR = '#8a7e62';  // 時刻ラベルと同じ --ink-faint 色
       return {
         id: `dayBoundary_${dayIdx}`,
         beforeDraw: (chart) => {
           const {ctx, chartArea} = chart;
           const yScale = chart.scales.y;
           if (!yScale || !chartArea) return;
-          // Compute Y-axis label values (skip 0 and max)
+          // Y軸線は chartArea.left から AXIS_PAD 分左にオフセット
+          // (折れ線・塗りは chartArea 内に描画されるので、主軸との間に AXIS_PAD の余白ができる)
+          const Y_AXIS_X = Math.round(chartArea.left - AXIS_PAD) + 0.5;
           const step = pickYStep(yScale.max);
           ctx.save();
-          // Grid lines + Y-axis number labels
-          ctx.font = "600 9px 'Inter', sans-serif";
+          // グリッド線 + Y軸ラベル (Y軸のすぐ左に配置)
+          ctx.font = "600 13px 'Inter', sans-serif";
           ctx.textBaseline = 'middle';
-          ctx.textAlign = 'left';
+          ctx.textAlign = 'right';
           for (let v = Math.floor(yScale.max / step) * step; v >= step; v -= step) {
-            if (v <= 0 || v >= yScale.max) continue;
+            // v が 0 なら別途最下位ラベルとして描画するのでスキップ、
+            // v が yScale.max を超えている場合のみスキップ (== max は描画対象)
+            if (v <= 0 || v > yScale.max) continue;
             const y = yScale.getPixelForValue(v);
             ctx.beginPath();
             ctx.strokeStyle = GRID_COLOR;
             ctx.lineWidth = 1;
-            ctx.moveTo(0, y);
-            ctx.lineTo(chart.width, y);
+            // グリッド線は Y軸線から chartArea.right まで
+            ctx.moveTo(Y_AXIS_X, y);
+            ctx.lineTo(chartArea.right, y);
             ctx.stroke();
-            fillTextWithHalo(ctx, String(v), Y_LABEL_X, y, LABEL_COLOR);
+            fillTextWithHalo(ctx, String(v), Y_AXIS_X - Y_LABEL_X_OFFSET, y, LABEL_COLOR);
           }
-          // Primary axes (Y vertical + X horizontal baseline)
+          // Y軸原点 (0) ラベル: X軸線の位置に描画
+          const y0 = yScale.getPixelForValue(0);
+          fillTextWithHalo(ctx, '0', Y_AXIS_X - Y_LABEL_X_OFFSET, y0, LABEL_COLOR);
+          // 一番上に描画されるY軸ラベル値を求め、その文字上端に Y軸線の上端を揃える
+          const yAxisTop = computeYAxisTop(chart);
+          // Y軸縦線 (最上位ラベル文字上端 → X軸線位置)
+          // X軸線は chartArea.bottom から AXIS_PAD 分下にオフセット
+          const xAxisY = Math.round(chartArea.bottom + AXIS_PAD) + 0.5;
           ctx.beginPath();
           ctx.strokeStyle = AXIS_COLOR;
           ctx.lineWidth = 1;
-          ctx.moveTo(Y_AXIS_X, chartArea.top);
-          ctx.lineTo(Y_AXIS_X, chartArea.bottom);
-          const xAxisY = Math.round(chartArea.bottom) + 0.5;
+          ctx.moveTo(Y_AXIS_X, yAxisTop);
+          ctx.lineTo(Y_AXIS_X, xAxisY);
+          // X軸ベースライン (Y軸線から chartArea.right まで)
           ctx.moveTo(Y_AXIS_X, xAxisY);
-          ctx.lineTo(chart.width, xAxisY);
+          ctx.lineTo(chartArea.right, xAxisY);
           ctx.stroke();
-          // Unit label "m/s" near top of Y-axis
-          ctx.font = "600 8px 'Inter', sans-serif";
-          ctx.textBaseline = 'top';
-          fillTextWithHalo(ctx, 'm/s', UNIT_X, Math.max(0, chartArea.top - 10), UNIT_COLOR);
           ctx.restore();
         }
       };
@@ -1780,22 +1909,35 @@
       return {
         id: `selectionLine_${dayIdx}`,
         afterDatasetsDraw: (chart) => {
+          if (selectedIndex == null || selectedIndex < 0) return;
           const selDay = Math.floor(selectedIndex / POINTS_PER_DAY);
-          if (selDay !== dayIdx) return;
           const selH = selectedIndex % POINTS_PER_DAY;
-          const meta = chart.getDatasetMeta(1);
+          const isSelectedDay = (selDay === dayIdx);
+          // time-labels-sel-line は自身の day-card のものを制御
+          const timeLabelsEl = dayTimeLabels[dayIdx];
+          const selLineExt = timeLabelsEl ? timeLabelsEl.querySelector('.time-labels-sel-line') : null;
+          // 選択日以外は縦線を描画せず、time-labels の延長線も非表示に
+          if (!isSelectedDay) {
+            if (selLineExt) selLineExt.classList.remove('visible');
+            return;
+          }
+          const meta = chart.getDatasetMeta(0);
           const point = meta.data[selH + 1];
           if (!point) return;
-          const {ctx, height} = chart;
+          const {ctx, chartArea} = chart;
+          if (!chartArea) return;
           ctx.save();
+          // 縦線: Y軸主軸線の上端 (最上位ラベル文字上端) から下端 (chartArea.bottom) まで
+          const selTopY = computeYAxisTop(chart);
           ctx.beginPath();
           ctx.setLineDash([4, 4]);
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
           ctx.lineWidth = 1.5;
-          ctx.moveTo(point.x, 0);
-          ctx.lineTo(point.x, height);
+          ctx.moveTo(point.x, selTopY);
+          ctx.lineTo(point.x, chartArea.bottom);
           ctx.stroke();
           ctx.setLineDash([]);
+          // ドット強調 (halo + アニメリング)
           const elapsed = performance.now() - selectionAnimStart;
           const dotRadius = 5;
           if (elapsed < 700) {
@@ -1815,6 +1957,69 @@
           ctx.arc(point.x, point.y, dotRadius + 4, 0, Math.PI * 2);
           ctx.stroke();
           ctx.restore();
+          // time-labels エリアへの延長線 (選択日のみ)
+          if (selLineExt) {
+            selLineExt.style.left = point.x + 'px';
+            selLineExt.classList.add('visible');
+            selLineExt.classList.remove('dim');
+          }
+        }
+      };
+    }
+
+    // 単日モードで、その日が今日 (dayIdx=0) の場合のみ現在時刻縦線を描画
+    function makeCurrentTimePlugin(dayIdx) {
+      return {
+        id: `currentTime_${dayIdx}`,
+        afterDatasetsDraw(chart) {
+          // 当日 (dayIdx=0) のカードでのみ描画。単日/マルチデイどちらのモードでも表示。
+          if (dayIdx !== 0) return;
+          const now = new Date();
+          const h = now.getHours() + now.getMinutes() / 60;
+          const firstHour = FORECAST_HOURS[0];
+          const lastHour = FORECAST_HOURS[POINTS_PER_DAY - 1];
+          if (h < firstHour || h > lastHour) return;
+          const { ctx, chartArea, scales } = chart;
+          if (!scales || !scales.x || !scales.y || !chartArea) return;
+          const x = scales.x.getPixelForValue(h);
+          ctx.save();
+          // 破線縦線 (Y軸主軸線の上端 〜 chartArea.bottom)
+          const nowTopY = computeYAxisTop(chart);
+          ctx.setLineDash([2, 2]);
+          ctx.strokeStyle = 'rgba(224, 168, 80, 0.85)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, nowTopY);
+          ctx.lineTo(x, chartArea.bottom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // 現在の風速を線形補間して y 座標を得る
+          const dayStart = dayIdx * POINTS_PER_DAY;
+          let idx0 = 0, idx1 = 1;
+          for (let i = 0; i < POINTS_PER_DAY - 1; i++) {
+            if (h >= FORECAST_HOURS[i] && h <= FORECAST_HOURS[i + 1]) {
+              idx0 = i; idx1 = i + 1; break;
+            }
+          }
+          const t = (h - FORECAST_HOURS[idx0]) / (FORECAST_HOURS[idx1] - FORECAST_HOURS[idx0]);
+          const s0 = avgWindSpeeds[dayStart + idx0];
+          const s1 = avgWindSpeeds[dayStart + idx1];
+          if (s0 == null || s1 == null) { ctx.restore(); return; }
+          const currentSpeed = s0 * (1 - t) + s1 * t;
+          const y = scales.y.getPixelForValue(currentSpeed);
+          // halo + ドット
+          ctx.fillStyle = 'rgba(224, 168, 80, 0.25)';
+          ctx.beginPath();
+          ctx.arc(x, y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#e0a850';
+          ctx.strokeStyle = '#f0e6d2';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
         }
       };
     }
@@ -1823,16 +2028,27 @@
       const card = document.createElement('div');
       card.className = 'day-card';
       card.dataset.dayIdx = dayIdx;
-      const dayMaxTemp = Math.max(...temps.slice(dayIdx * POINTS_PER_DAY, (dayIdx + 1) * POINTS_PER_DAY));
+      const daySlice = temps.slice(dayIdx * POINTS_PER_DAY, (dayIdx + 1) * POINTS_PER_DAY);
+      const dayMaxTemp = Math.round(Math.max(...daySlice));
+      const dayMinTemp = Math.round(Math.min(...daySlice));
+      // 曜日が土日かどうか判定 (今日=day0を基準に日数加算)
+      const cardDate = new Date();
+      cardDate.setDate(cardDate.getDate() + dayIdx);
+      const dow = cardDate.getDay();
+      const weekendClass = (dow === 0 || dow === 6) ? 'weekend' : 'weekday';
+      // 1日の代表天気アイコン (13:00 = hour index 2 の天気)
+      const dayIconIdx = dayIdx * POINTS_PER_DAY + 2;
+      const dayIcon = icons[dayIconIdx] || '';
       const head = document.createElement('div');
       head.className = 'day-card-head';
       head.innerHTML = `
         <span class="day-card-head-center">
-          <span class="day-text">${dayLabels[dayIdx]}</span>
-          <span class="day-temp"><span>${dayMaxTemp}</span>°</span>
+          <span class="day-text ${weekendClass}">${dayLabels[dayIdx]}</span>
+          <span class="day-summary-icon">${dayIcon}</span>
+          <span class="day-temp"><span>${dayMaxTemp}</span>°/${dayMinTemp}°</span>
         </span>
         <button class="alt-toggle" type="button" aria-label="高度別予測を表示">
-          <span class="alt-toggle-label">ALTITUDE</span>
+          <span class="alt-toggle-label">ALT</span>
         </button>
       `;
       card.appendChild(head);
@@ -1842,22 +2058,8 @@
       //   - alt-toggle button: toggles per-day altitude panel inline (doesn't
       //     close the sheet)
       //   - chart area: dot selection takes priority
-      const onHeadTap = () => {
-        if (isExpanded) {
-          const hour = selectedIndex % POINTS_PER_DAY;
-          const newIdx = dayIdx * POINTS_PER_DAY + hour;
-          fadeOutDayCards();
-          setTimeout(() => {
-            updateSelection(newIdx);
-            scrollToSelectedDay(false);
-            setExpanded(false);
-            fadeInDayCards();
-          }, 250);
-        } else {
-          setExpanded(true);
-        }
-      };
-      head.querySelector('.day-card-head-center').addEventListener('click', onHeadTap);
+      // ヘッダタップは document レベルの共通リスナーで処理
+      // (単日/マルチ切替 + ALT展開中はALTクローズ)
 
       // Altitude toggle button — opens/closes the inline altitude panel for this day
       const altBtn = head.querySelector('.alt-toggle');
@@ -1882,6 +2084,23 @@
       chartRegion.appendChild(timeOverlay);
       dayTimeOverlays[dayIdx] = timeOverlay;
       card.appendChild(chartRegion);
+      
+      // 新レイアウト: 時刻ラベルを day-card 直下に配置 (x 座標はChart.jsのデータ点に同期)
+      const timeLabelsEl = document.createElement('div');
+      timeLabelsEl.className = 'day-card-time-labels';
+      // 選択線の time-labels エリアへの延長用要素 (JS で位置とvisibility制御)
+      const selLineExt = document.createElement('div');
+      selLineExt.className = 'time-labels-sel-line';
+      timeLabelsEl.appendChild(selLineExt);
+      for (let h = 0; h < POINTS_PER_DAY; h++) {
+        const t = document.createElement('span');
+        t.className = 'time-label';
+        t.textContent = `${FORECAST_HOURS[h]}:00`;
+        timeLabelsEl.appendChild(t);
+      }
+      card.appendChild(timeLabelsEl);
+      dayTimeLabels[dayIdx] = timeLabelsEl;
+      
       weeklyStack.appendChild(card);
 
       for (let h = 0; h < POINTS_PER_DAY; h++) {
@@ -1893,14 +2112,12 @@
         infoEl.dataset.idx = i;
         infoEl.innerHTML = `
           <span class="w-speed" style="color:${speedColor(speed)}">${speed.toFixed(1)}</span>
-          <span class="w-arrow">${windArrow(windDirs[i])}</span>
-          <span class="w-icon">${icons[i] || ''}</span>
+          <span class="w-row1">
+            <span class="w-icon">${icons[i] || ''}</span>
+            <span class="w-arrow">${windArrow(windDirs[i])}</span>
+          </span>
         `;
         infoEl.addEventListener('click', (e) => {
-          if (isExpanded) {
-            e.stopPropagation();
-            return;
-          }
           e.stopPropagation();
           updateSelection(i);
         });
@@ -1919,23 +2136,13 @@
         data: {
           datasets: [
             {
-              data: dayPoints(maxWindSpeeds, dayIdx),
-              borderColor: 'rgba(240, 230, 210, 0.7)',
-              borderWidth: 1, borderDash: [4, 3], fill: false, tension: 0.4,
-              pointRadius: 0, pointHoverRadius: 0, pointHitRadius: 0,
-              parsing: false,
-              segment: {
-                borderColor: (ctx) => {
-                  const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, 0.7);
-                  return buildSegmentGradient(ctx, '240, 230, 210', a0, a1);
-                }
-              }
-            },
-            {
               data: dayPoints(avgWindSpeeds, dayIdx),
+              // clip: true — 折れ線グラフはX主軸範囲内で完結。Ghost点への線分はchartArea外でクリップ
+              // (フェードアウトは chartArea 内で完結する)
+              clip: true,
               borderColor: '#f0e6d2',
               backgroundColor: 'rgba(240, 230, 210, 0.15)',
-              borderWidth: 2, fill: true, tension: 0.4,
+              borderWidth: 2, fill: 'origin', tension: 0.4,
               pointBackgroundColor: pointColorFor(dayIdx),
               pointBorderColor: pointColorFor(dayIdx),
               pointRadius: (ctx) => {
@@ -1958,34 +2165,40 @@
                   const v = realIdx >= 0 ? avgWindSpeeds[realIdx] : 0;
                   const band = speedBand(v);
                   const [a0, a1] = segmentEndpointAlphas(ctx.p0DataIndex, ctx.p1DataIndex, band.fillAlpha);
-                  return buildSegmentGradient(ctx, band.rgb, a0, a1);
+                  return buildFillGradient(ctx, band.rgb, a0, a1);
                 }
               }
             }
           ]
         },
         options: {
-          layout: { padding: { left: 0, right: 0, top: 22, bottom: 22 } },
+          // 新レイアウト: 左右パディング 16px で対称、top 0 (③指定), bottom 0
+          layout: { padding: { left: 18, right: 16, top: 7, bottom: 2 } },
           responsive: true, maintainAspectRatio: false,
+          // resize / 更新時のアニメーションを無効化 (シート開閉時の "右伸び" 対策)
+          animation: false,
+          animations: { colors: false, x: false, y: false },
+          transitions: { active: { animation: { duration: 0 } }, resize: { animation: { duration: 0 } } },
           plugins: { legend: { display: false }, tooltip: { enabled: false } },
           scales: {
             x: {
               type: 'linear',
-              min: FORECAST_HOURS[0] - GHOST_HOURS_BEFORE,
-              max: FORECAST_HOURS[POINTS_PER_DAY - 1] + GHOST_HOURS_AFTER,
+              // x軸範囲を実データ点範囲より広げる → chartArea 内で 7:00 と 19:00 が
+              // 左右16pxずつ内側に配置される (day-card幅約360px、chartArea≈328px、1単位≈27.3pxを想定)
+              // 12単位 (実データ) + 両側 0.6 単位 (16px相当) = 13.2 単位
+              min: FORECAST_HOURS[0] - 0.6,
+              max: FORECAST_HOURS[POINTS_PER_DAY - 1] + 0.6,
               grid: { display: false },
               ticks: { display: false }
             },
             y: {
               grid: { display: false, drawBorder: false },
               ticks: { display: false, stepSize: 2 },
-              min: -0.6, suggestedMax: 8
+              min: 0, max: 6
             }
           },
           interaction: { mode: 'nearest', axis: 'x', intersect: false },
           onClick: (e, activeEls) => {
-            // Chart area is non-interactive when the sheet is open
-            if (isExpanded) return;
             if (activeEls.length === 0) return;
             const dsIdx = activeEls[0].index;
             if (isGhost(dsIdx)) return;
@@ -1993,7 +2206,7 @@
             updateSelection(realIdx);
           }
         },
-        plugins: [makeDayBoundaryPlugin(dayIdx), makeSelectionPlugin(dayIdx), makeOverlaySyncPlugin(dayIdx)]
+        plugins: [makeDayBoundaryPlugin(dayIdx), makeSelectionPlugin(dayIdx), makeOverlaySyncPlugin(dayIdx), makeCurrentTimePlugin(dayIdx)]
       });
       dayCharts[dayIdx] = chart;
     }
@@ -2011,6 +2224,9 @@
       dayCharts.length = 0;
       dayInfoOverlays.length = 0;
       dayTimeOverlays.length = 0;
+      dayTimeLabels.length = 0;
+      // 常に全 7 日をレンダし、単日モードでは CSS で選択日以外を非表示に。
+      // これによりモード切替時に DOM 再構築不要になり、height transition が滑らか。
       for (let d = 0; d < DAYS; d++) buildDayCard(d);
     }
 
@@ -2086,9 +2302,26 @@
         // === CLOSE sequence (reverse of open) ===
         panel.style.height = panel.scrollHeight + 'px';
         // Animate sheet height back down in sync with the panel
-        if (!isExpanded) {
+        {
           sheet.classList.remove('has-alt-open');
-          document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
+          // 現在のモード (単日/マルチ) に応じた高さへ戻す
+          const CARD_UNIT = CONTENT_COLLAPSED + DAY_CARD_MARGIN;
+          const sdAttr = document.body.dataset.singleDay;
+          const isSingle = sdAttr != null && sdAttr !== '';
+          const baseH = (isSingle ? CARD_UNIT : CARD_UNIT * 3) + STACK_TOP_PAD;
+          setSheetHeight(baseH);
+          // has-alt-open 解除で全カード再表示 → 選択日カードを上端に復元
+          requestAnimationFrame(() => {
+            if (isSingle) {
+              const selCard = weeklyStack.querySelector(`.day-card[data-day-idx="${sdAttr}"]`);
+              if (selCard) {
+                const padTop = parseFloat(getComputedStyle(weeklyStack).paddingTop) || 0;
+                weeklyStack.scrollTop = Math.max(0, selCard.offsetTop - padTop);
+              }
+            } else {
+              weeklyStack.scrollTop = 0;
+            }
+          });
         }
         requestAnimationFrame(() => {
           panel.style.height = '0px';
@@ -2107,28 +2340,44 @@
     // Compute and set the collapsed sheet's expanded height based on any open
     // inline alt-panel in the visible pinned day-card.
     function updateCollapsedSheetHeight() {
-      // Only relevant when the sheet is currently collapsed
-      if (isExpanded) {
-        sheet.classList.remove('has-alt-open');
-        return;
-      }
       // Find the day-card that is currently pinned (= the one matching selectedIndex)
       const selDay = Math.floor(selectedIndex / POINTS_PER_DAY);
       const pinned = weeklyStack.querySelector(`.day-card[data-day-idx="${selDay}"]`);
       const anyOpen = pinned && pinned.classList.contains('alt-open');
       sheet.classList.toggle('has-alt-open', !!anyOpen);
+      // ALT 展開中は alt-open カードのみ表示 (CSSで他を非表示) → scrollTop は 0 が正位置
+      if (anyOpen) weeklyStack.scrollTop = 0;
       if (anyOpen) {
         // Read panel height after the next frame so CSS transition has applied
         requestAnimationFrame(() => {
           const panel = pinned.querySelector('.day-card-alt-panel');
           // Use scrollHeight to get full content height regardless of max-height
           const panelH = panel ? panel.scrollHeight : 0;
-          const total = COLLAPSED + panelH;
+          // 単日モードのシート高 (カード1枚 + margin + top pad) + パネル高
+          const base = CONTENT_COLLAPSED + DAY_CARD_MARGIN + STACK_TOP_PAD;
+          const total = base + panelH;
           document.documentElement.style.setProperty('--sheet-h-collapsed-alt', total + 'px');
-          document.documentElement.style.setProperty('--sheet-h', total + 'px');
+          setSheetHeight(total);
         });
       } else {
-        document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
+        // ALTパネル閉: 現在のモード (単日/マルチ) に応じた高さへ戻す
+        const CARD_UNIT = CONTENT_COLLAPSED + DAY_CARD_MARGIN;
+        const sdAttr = document.body.dataset.singleDay;
+        const isSingle = sdAttr != null && sdAttr !== '';
+        const baseH = (isSingle ? CARD_UNIT : CARD_UNIT * 3) + STACK_TOP_PAD;
+        setSheetHeight(baseH);
+        // 単日モードなら選択日カードを上端に復元 (ALT中は他カード非表示で scrollTop=0 だった)
+        requestAnimationFrame(() => {
+          if (isSingle) {
+            const card = weeklyStack.querySelector(`.day-card[data-day-idx="${sdAttr}"]`);
+            if (card) {
+              const padTop = parseFloat(getComputedStyle(weeklyStack).paddingTop) || 0;
+              weeklyStack.scrollTop = Math.max(0, card.offsetTop - padTop);
+            }
+          } else {
+            weeklyStack.scrollTop = 0;
+          }
+        });
       }
     }
 
@@ -2181,7 +2430,8 @@
       if (dt) {
         const dayStr = `${dt.getMonth()+1}/${dt.getDate()}(${dow[dt.getDay()]})`;
         const timeStr = `${String(dt.getHours()).padStart(2,'0')}:00`;
-        document.getElementById('topWindTime').textContent = `${dayStr} ${timeStr}`;
+        const timeEl = document.getElementById('topWindTime');
+        if (timeEl) timeEl.textContent = `${dayStr} ${timeStr}`;
       }
       document.getElementById('topWindDir').style.transform = `rotate(${windDirs[idx] + 180}deg)`;
       // Point styling is handled by scriptable functions on each day-card chart;
@@ -2206,10 +2456,19 @@
     // === REFRESH UI AFTER DATA LOADS / CHANGES ===
     let hasInitialSelection = false;
     
-    // Initial selection: today's earliest forecast hour (07:00). The user can
-    // tap day-cards to switch days, or hours to switch within a day.
+    // Initial selection: today's forecast hour nearest to the current wall-clock
+    // time. If the user opens the app at 14:20, this picks 13:00 (index 2); at
+    // 08:00 it picks 07:00; at 21:00 it picks 19:00. Always returns a valid
+    // index into today (day 0), so the app opens focused on "now" rather than a
+    // fixed morning slot.
     function pickIndexForNow() {
-      return 0;  // day 0 (today), hour index 0 (07:00)
+      const nowH = new Date().getHours() + new Date().getMinutes() / 60;
+      let closestI = 0, minDiff = Infinity;
+      FORECAST_HOURS.forEach((fh, i) => {
+        const diff = Math.abs(fh - nowH);
+        if (diff < minDiff) { minDiff = diff; closestI = i; }
+      });
+      return closestI;  // day 0 (today), hour index nearest to now
     }
     
     function refreshAfterDataLoaded() {
@@ -2240,7 +2499,9 @@
       const selDay = Math.floor(selectedIndex / POINTS_PER_DAY);
       const card = weeklyStack.querySelector(`.day-card[data-day-idx="${selDay}"]`);
       if (!card) return;
-      const targetTop = card.offsetTop;
+      // padding-top を差し引くことで、weekly-stack 上部のパディングが常に見える状態を維持
+      const stackPadTop = parseFloat(getComputedStyle(weeklyStack).paddingTop) || 0;
+      const targetTop = Math.max(0, card.offsetTop - stackPadTop);
       if (animate && weeklyStack.scrollTo) {
         weeklyStack.scrollTo({ top: targetTop, behavior: 'smooth' });
       } else {
@@ -2248,14 +2509,6 @@
       }
     }
 
-    // Crossfade helpers — used when switching the selected day from the
-    // expanded sheet. Adding .is-fading sets opacity to 0 via the CSS transition.
-    function fadeOutDayCards() {
-      weeklyStack.querySelectorAll('.day-card').forEach(c => c.classList.add('is-fading'));
-    }
-    function fadeInDayCards() {
-      weeklyStack.querySelectorAll('.day-card').forEach(c => c.classList.remove('is-fading'));
-    }
 
     // === LOAD + REFRESH (used at startup and on point change) ===
     let isLoading = false;
@@ -2295,90 +2548,207 @@
       requestAnimationFrame(syncOverlayPositions);
     });
 
-    // === BOTTOM SHEET — tap on the first day-card head to toggle ===
-    const sheet = document.getElementById('bottomSheet');
-    
-    // Read actual bottom inset (safe-area or 24px gesture-bar fallback) so we
-    // can size the sheet such that content remains fully visible above the
-    // Android gesture bar / iOS home bar.
-    function bottomInset() {
-      // Read CSS env via a temporary element
-      const probe = document.createElement('div');
-      probe.style.position = 'absolute';
-      probe.style.padding = '0 0 max(env(safe-area-inset-bottom, 0px), 24px) 0';
-      probe.style.visibility = 'hidden';
-      document.body.appendChild(probe);
-      const px = parseFloat(getComputedStyle(probe).paddingBottom) || 24;
-      document.body.removeChild(probe);
-      return px;
-    }
-    const SHEET_BOTTOM_PAD = bottomInset();
-    
-    // Internal content heights (days row + chart, plus alt panel area when expanded)
-    // 1 day-card exactly: 36px header + 92px chart = 128px
-    const CONTENT_COLLAPSED = 128;
-    // Expanded height: leave a bit of map visible at top, fill the rest of the screen
-    const CONTENT_EXPANDED = Math.min(window.innerHeight * 0.88, 880);
-    
-    // Total sheet heights. The bottom-sheet's CSS padding-bottom is included
-    // via box-sizing: border-box, so the height value here IS the visible card
-    // area. We deliberately do NOT add SHEET_BOTTOM_PAD when collapsed so the
-    // sheet height matches the day-card height exactly (per design).
-    const COLLAPSED = CONTENT_COLLAPSED;
-    const EXPANDED = CONTENT_EXPANDED + SHEET_BOTTOM_PAD;
+    // === 単日/マルチデイ トグル ===
+    // デフォルトはマルチデイ(3日表示)。日付ヘッダタップ → その日だけ表示。
+    // 同じ日をもう一度タップ → マルチデイに戻る。別の日をタップ → その日に切替。
+    // body.dataset.singleDay に日インデックス(文字列)を格納 / 未設定 = マルチデイ。
 
-    document.documentElement.style.setProperty('--sheet-collapsed-h', COLLAPSED + 'px');
-    document.documentElement.style.setProperty('--sheet-expanded-h', EXPANDED + 'px');
-
-    let isExpanded = false;
-
-    function setExpanded(expanded) {
-      isExpanded = expanded;
-      if (expanded) {
-        // Clear collapsed-alt state when expanding — and close any open alt
-        // panels in day-cards. The alt panel is only meant for the pinned
-        // collapsed view; in the multi-day expanded view it would clutter
-        // the layout, and the toggle button is also hidden in this state.
-        sheet.classList.remove('has-alt-open');
-        weeklyStack.querySelectorAll('.day-card.alt-open').forEach((card) => {
-          card.classList.remove('alt-open');
-          const panel = card.querySelector('.day-card-alt-panel');
-          if (panel) panel.style.height = '0px';
-        });
-        const cards = weeklyStack.querySelectorAll('.day-card');
-        cards.forEach((c, i) => {
-          c.style.setProperty('--reveal-delay', (i * 40) + 'ms');
-        });
-        sheet.classList.add('is-revealing');
-        void sheet.offsetWidth;
-        sheet.classList.add('expanded');
-        const total = cards.length * 40 + 450;
-        setTimeout(() => sheet.classList.remove('is-revealing'), total);
-      } else {
-        sheet.classList.remove('expanded');
-        sheet.classList.remove('is-revealing');
+    // === シート高さ制御を一元化 ===
+    // inline style height を直接書き、transition 中は毎フレーム地図を追従させる。
+    function setSheetHeight(px) {
+      const sheetEl = document.getElementById('bottomSheet');
+      if (!sheetEl) return;
+      sheetEl.style.height = px + 'px';
+      // CSS 変数も同期 (FAB 位置などが参照)
+      document.documentElement.style.setProperty('--sheet-h', px + 'px');
+      // transition (0.32s) 中、毎フレーム Leaflet をリサイズ + 中心を固定。
+      // 測定地点 (map center) が常に地図領域の中央に保たれ、滑らかに追従する。
+      if (typeof map !== 'undefined' && map && map.invalidateSize) {
+        const center = map.getCenter();
+        const zoom = map.getZoom();
+        const start = performance.now();
+        cancelAnimationFrame(setSheetHeight._raf);
+        const step = (now) => {
+          map.invalidateSize({ animate: false });
+          map.setView(center, zoom, { animate: false });
+          if (now - start < 400) {  // transition 0.32s + 余裕
+            setSheetHeight._raf = requestAnimationFrame(step);
+          }
+        };
+        setSheetHeight._raf = requestAnimationFrame(step);
       }
-      document.documentElement.style.setProperty('--sheet-h', (expanded ? EXPANDED : COLLAPSED) + 'px');
+    }
+
+    function setSingleDay(dayIdx) {
+      // 直前の単日選択 (マルチ復帰時の表示ウィンドウ計算に使用)
+      const prevAttr = document.body.dataset.singleDay;
+      const prevDay = (prevAttr != null && prevAttr !== '') ? parseInt(prevAttr, 10) : null;
+      // dayIdx = null → マルチデイに戻る
+      if (dayIdx == null) {
+        delete document.body.dataset.singleDay;
+      } else {
+        document.body.dataset.singleDay = String(dayIdx);
+      }
+      // 全カードは常に DOM に存在・表示。bottom-sheet の height 変化と
+      // transform シフトで表示範囲を切り替え。
+      // シート高: 単日 = 1カード分, マルチ = 3カード分
+      const CARD_UNIT = CONTENT_COLLAPSED + DAY_CARD_MARGIN;
+      const sheetH = ((dayIdx != null) ? CARD_UNIT : CARD_UNIT * 3) + STACK_TOP_PAD;
+      // 閉じ方向はジャンプ段階の後に setSheetHeight を呼ぶ (下のスクロール制御内)。
+      // 開き方向はここで即開始。
+      if (dayIdx == null) setSheetHeight(sheetH);
+      // 選択予報点更新
+      if (avgWindSpeeds.length > 0) {
+        if (dayIdx != null) {
+          const hourInDay = pickIndexForNow();
+          updateSelection(dayIdx * POINTS_PER_DAY + hourInDay);
+        } else if (selectedIndex != null) {
+          updateSelection(selectedIndex);
+        }
+      }
+      // (上のカードは消さない: シート上端の降下が覆い隠すため、全カード常時表示)
+
+      // === スクロールアニメーション ===
+      const padTop = parseFloat(getComputedStyle(weeklyStack).paddingTop) || 0;
+      const padBottom = parseFloat(getComputedStyle(weeklyStack).paddingBottom) || 0;
+      cancelAnimationFrame(setSingleDay._scrollRaf);
+      clearTimeout(setSingleDay._scrollT);
+      const DURATION = 400;  // CSS transition 0.32s + 余裕
+      const scrollStart = performance.now();
+
+      if (dayIdx != null) {
+        // --- 閉じ方向 (単日展開): 2段階 ---
+        // [1] ジャンプ: transition を無効化し、シート上端をタップカード直上へ瞬時移動。
+        //     --sheet-h 連動で #map も同時拡大 → 上のカード+ベース領域が即座に地図になる。
+        //     scrollTop も同時にタップカード位置へ (タップカードは画面上不動)。
+        // [2] スライド: transition を戻し、1日高へアニメーション。
+        //     タップカードはシート上端に密着したまま下降 (全日程で1日目と同一の動き)。
+        const card = weeklyStack.querySelector(`.day-card[data-day-idx="${dayIdx}"]`);
+        const endScroll = Math.max(0, (card ? card.offsetTop : 0) - padTop);
+        const startScroll = weeklyStack.scrollTop;
+        const sheetEl2 = document.getElementById('bottomSheet');
+        const curH = sheetEl2 ? sheetEl2.getBoundingClientRect().height : 0;
+        // タップカード上端の、シート上端からの視覚オフセット (padTop 分は残す)
+        const drop = Math.max(0, (card ? card.offsetTop : 0) - startScroll - padTop);
+        const interH = Math.max(sheetH, curH - drop);  // 中間高 (最終高より小さくしない)
+        if (drop > 0 && sheetEl2) {
+          // [1] ジャンプ (transition 無効の 1 フレーム)
+          document.body.classList.add('snap-jump');
+          sheetEl2.style.height = interH + 'px';
+          document.documentElement.style.setProperty('--sheet-h', interH + 'px');
+          weeklyStack.scrollTop = endScroll;
+          void sheetEl2.offsetHeight;  // 強制リフロー (ジャンプを確定)
+          document.body.classList.remove('snap-jump');
+        } else {
+          weeklyStack.scrollTop = endScroll;
+        }
+        // [2] スライド: 最終高へアニメーション (setSheetHeight が map 同期も担当)
+        setSheetHeight(sheetH);
+        setSingleDay._scrollT = setTimeout(() => { weeklyStack.scrollTop = endScroll; }, DURATION + 40);
+      } else {
+        // --- 開き方向 (マルチ復帰): 選択日が極力動かない 3日ウィンドウを表示 ---
+        // 表示ウィンドウの最上日 topDay:
+        //   d=0,1     → 0        (d=0: 上段 / d=1: 中央)
+        //   d=2..4    → d-2      (選択日は下段 = 画面上動かない)
+        //   d=DAYS-2  → DAYS-3   (下から2番目: 中央)
+        //   d=DAYS-1  → DAYS-3   (最下日: 下段 = 動かない)
+        let targetScroll = 0;
+        if (prevDay != null) {
+          let topDay;
+          if (prevDay <= 1) topDay = 0;
+          else if (prevDay === DAYS - 2) topDay = DAYS - 3;
+          else topDay = Math.min(prevDay - 2, DAYS - 3);
+          targetScroll = topDay * (CONTENT_COLLAPSED + DAY_CARD_MARGIN);
+        }
+        // "下端アンカー" 方式: 毎フレーム実測 viewport から、直前の選択カードの
+        // 下端がシート下端に揃う scrollTop を計算し、目標値との max を取る。
+        // → 下段ケースではカードが 1px も動かず、中央/上段ケースでは前半静止 →
+        //   後半シート上端と共に上昇。バウンスなし。
+        const prevCard = prevDay != null
+          ? weeklyStack.querySelector(`.day-card[data-day-idx="${prevDay}"]`) : null;
+        const pCardTop = prevCard ? prevCard.offsetTop : 0;
+        const pCardH = prevCard ? prevCard.offsetHeight : CONTENT_COLLAPSED;
+        // 単日ビューの scrollTop と同値だが、状態を明示的に揃えてから開始する
+        weeklyStack.scrollTop = Math.max(0, pCardTop - padTop);
+        const scrollStep = (now) => {
+          const viewportH = weeklyStack.clientHeight;  // 実測 (transition 途中の値)
+          const anchor = pCardTop + pCardH + padBottom - viewportH;
+          weeklyStack.scrollTop = Math.max(targetScroll, anchor);
+          if (now - scrollStart < DURATION) {
+            setSingleDay._scrollRaf = requestAnimationFrame(scrollStep);
+          } else {
+            weeklyStack.scrollTop = targetScroll;  // 最終確定
+          }
+        };
+        setSingleDay._scrollRaf = requestAnimationFrame(scrollStep);
+        setSingleDay._scrollT = setTimeout(() => { weeklyStack.scrollTop = targetScroll; }, DURATION + 40);
+      }
+
       requestAnimationFrame(() => {
         for (const c of dayCharts) if (c) c.resize();
         syncOverlayPositions();
-        if (expanded) {
-          weeklyStack.scrollTop = 0;
-        } else {
-          setTimeout(() => {
-            scrollToSelectedDay(false);
-            updateCollapsedSheetHeight();
-          }, 350);
-        }
+        // 地図の invalidateSize は setSheetHeight のフレームループが担当
       });
     }
+
+    function toggleSingleDay(dayIdx) {
+      const cur = document.body.dataset.singleDay;
+      if (cur != null && cur !== '' && parseInt(cur, 10) === dayIdx) {
+        setSingleDay(null);  // 同じ日タップ → マルチに戻る
+      } else {
+        setSingleDay(dayIdx);
+      }
+    }
+
+    // 日付ヘッダタップで単日/マルチをトグル
+    // (day-card-head 内の alt-toggle ボタンは除外)
+    document.addEventListener('click', (e) => {
+      // ALT ボタンや ALT パネル内タップは通す
+      if (e.target.closest('.alt-toggle')) return;
+      if (e.target.closest('.day-card-alt-panel')) return;
+      const head = e.target.closest('.day-card-head');
+      if (!head) return;
+      const card = head.closest('.day-card');
+      if (!card) return;
+      const d = parseInt(card.dataset.dayIdx, 10);
+      if (Number.isNaN(d)) return;
+      // ALT パネル展開中は、日付ヘッダタップ = ALT クローズ (単日/マルチ切替はしない)
+      const sheetHasAlt = sheet.classList.contains('has-alt-open');
+      if (sheetHasAlt && card.classList.contains('alt-open')) {
+        toggleDayAltPanel(card, d);  // クローズ動作 (alt-open 状態なので閉じる)
+        return;
+      }
+      toggleSingleDay(d);
+    });
+
+    // 1分ごとに Chart を再描画 (現在時刻縦線を更新) - 当日のグラフに反映
+    setInterval(() => {
+      if (dayCharts[0]) {
+        dayCharts[0].update('none');
+      }
+    }, 60 * 1000);
+
+    // === BOTTOM SHEET — tap on the first day-card head to toggle ===
+    const sheet = document.getElementById('bottomSheet');
+    
+    // Internal content heights
+    // 1 day-card exactly: 36px header + 72px chart + 21px time labels = 129px
+    const CONTENT_COLLAPSED = 129;
+    // day-card 同士の間のマージン (CSS --day-card-margin と同期)
+    const DAY_CARD_MARGIN = 4;
+    // リスト最上部の day-card 上のパディング (CSS --stack-top-pad と同期)
+    const STACK_TOP_PAD = 4;
+    const COLLAPSED = CONTENT_COLLAPSED;
+
 
     // Tap-to-toggle handled by each day-card-head's click listener (see buildDayCard).
     // No separate gesture handler needed — vertical scroll inside the expanded sheet
     // works natively via the .weekly-stack overflow-y: auto.
 
     // Initial sheet height var for FAB positioning
-    document.documentElement.style.setProperty('--sheet-h', COLLAPSED + 'px');
+    // マルチデイ(3日)がデフォルトなので 3 × (COLLAPSED + MARGIN) + TOP_PAD
+    document.documentElement.style.setProperty('--sheet-h',
+      ((COLLAPSED + DAY_CARD_MARGIN) * 3 + STACK_TOP_PAD) + 'px');
 
     // === PULL-TO-REFRESH ===
     // When the user drags the bottom-sheet down (only valid when the sheet is
@@ -2395,11 +2765,8 @@
       let ptrPointerId = null;
 
       function canStartPull() {
-        // Only start a pull when we're actually at the top of any scrollable
-        // content. When expanded, that means weeklyStack.scrollTop === 0.
-        // When collapsed, the stack is at top by definition.
-        if (!isExpanded) return true;
-        return weeklyStack.scrollTop <= 0;
+        // 現行仕様: シートは常に collapsed 相当のためプル開始は常に許可
+        return true;
       }
 
       function setPullDistance(d) {

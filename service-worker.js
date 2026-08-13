@@ -5,7 +5,7 @@
 //   - Map tiles (CARTO Voyager) → stale-while-revalidate, capped LRU cache
 //   - Forecast API (Open-Meteo) → network-first, fallback to cache when offline
 //   - Third-party libs (Leaflet, Chart.js, Google Fonts) → cache-first
-const CACHE_VERSION = 'v30-7';
+const CACHE_VERSION = 'v31-103';
 const SHELL_CACHE = `wind-shell-${CACHE_VERSION}`;
 const TILES_CACHE = `wind-tiles-${CACHE_VERSION}`;
 const API_CACHE   = `wind-api-${CACHE_VERSION}`;
