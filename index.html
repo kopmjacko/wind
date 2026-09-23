@@ -1029,8 +1029,13 @@
     const STORAGE_KEY = 'wind_paramotor_points_v1';
     
     const map = L.map('map', { zoomControl: false }).setView(DEFAULT_LATLNG, 12);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // CARTO Voyager タイル。匿名アクセスは廃止されたため API キーが必須。
+    // キーは https://carto.com/basemaps/apikey/ で無料発行 (メールで即時届く)。
+    // ↓ 届いたキーをここに貼り付ける
+    const CARTO_API_KEY = 'cb1_3ukh_1_9734b115c5f6ecf816ca9ab0';
+    L.tileLayer(`https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${CARTO_API_KEY}`, {
       maxZoom: 19,
+      subdomains: 'abcd',
       attribution: '© OpenStreetMap, © CARTO'
     }).addTo(map);
 
